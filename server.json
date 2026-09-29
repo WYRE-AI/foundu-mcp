@@ -1,0 +1,50 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.WYRE-AI/foundu-mcp",
+  "title": "FoundU",
+  "description": "MCP server for FoundU roster, hours, and labour-cost aggregates. Pay rates, bank details, tax file numbers, and employee PII are omitted.",
+  "repository": {
+    "url": "https://github.com/WYRE-AI/foundu-mcp",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "websiteUrl": "https://github.com/WYRE-AI/foundu-mcp",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/wyre-ai/foundu-mcp:0.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "FOUNDU_BASE_URL",
+          "description": "Australian FoundU tenant origin (https://<tenant>.foundu.com.au). Infinity Ben must grant partner API access.",
+          "isRequired": true,
+          "format": "string"
+        },
+        {
+          "name": "FOUNDU_API_TOKEN",
+          "description": "FoundU partner API token. Steadfast owns credential rotation.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MCP_TRANSPORT",
+          "description": "Transport mode. Set to stdio for local CLI use; the image defaults to http for gateway hosting.",
+          "isRequired": false,
+          "default": "stdio",
+          "format": "string"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "description": "Log verbosity: debug, info, warn, error",
+          "isRequired": false,
+          "default": "info",
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

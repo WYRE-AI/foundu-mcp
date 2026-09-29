@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Thin caller for the canonical reusable release pipeline.
+jobs:
+  release:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
+      id-token: write
+      security-events: write
+    uses: WYRE-AI/reusable-workflows/.github/workflows/mcp-server-release.yml@2b0b056bd7544937e5cbd56cf2e1ff8a180a411f
+    with:
+      server-name: foundu-mcp
+      image-name: ghcr.io/wyre-ai/foundu-mcp
+    secrets: inherit
+
+  # Container deploy stays off until Infinity Ben grants FoundU partner API
+  # access and Steadfast provisions gateway credentials for the AU tenant.
+  # deploy:
+  #   needs: release
+  #   if: needs.release.outputs.released == 'true'
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+  #   uses: WYRE-AI/reusable-workflows/.github/workflows/mcp-server-deploy.yml@2b0b056bd7544937e5cbd56cf2e1ff8a180a411f
+  #   with:
+  #     vendor-slug: foundu
+  #     image-name: ghcr.io/wyre-ai/foundu-mcp
+  #     digest: ${{ needs.release.outputs.digest }}
+  #     version: ${{ needs.release.outputs.version }}
+  #   secrets: inherit
