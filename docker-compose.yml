@@ -2,7 +2,7 @@ services:
   foundu-mcp:
     build: .
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       - FOUNDU_BASE_URL=${FOUNDU_BASE_URL}
       - FOUNDU_API_TOKEN=${FOUNDU_API_TOKEN}

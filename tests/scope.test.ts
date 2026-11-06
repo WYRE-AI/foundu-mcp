@@ -27,6 +27,9 @@ describe('aggregate path allowlist', () => {
     '/api/v1/aggregates/hours/../employees',
     '/api/v1/aggregates/timesheets/12345',
     '/api/v1/aggregates/hours/%65mployees',
+    '/api/v1/aggregates/hours/x%3Fdob=1',
+    '/api/v1/aggregates/hours/x%23frag',
+    '/api/v1/aggregates/hours/%252565',
     'https://evil.example/api/v1/aggregates/rosters',
     '//evil.example/api/v1/aggregates/rosters',
   ])('refuses %s', (path) => {

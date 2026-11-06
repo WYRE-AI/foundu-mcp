@@ -91,7 +91,7 @@ npm run start:http
 
 ```bash
 docker build -t foundu-mcp .
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   -e FOUNDU_BASE_URL=https://tenant.foundu.com.au \
   -e FOUNDU_API_TOKEN \
   foundu-mcp
@@ -104,6 +104,7 @@ The image listens on `8080`, runs as a non-root user, and probes `/health`.
 ```bash
 curl -s http://localhost:8080/mcp \
   -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
   -H 'x-foundu-base-url: https://tenant.foundu.com.au' \
   -H 'x-foundu-api-token: <rotated by Steadfast>' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"foundu_roster_summary","arguments":{"groupBy":"location"}}}'

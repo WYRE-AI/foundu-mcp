@@ -147,7 +147,8 @@ export function canonicalizeAggregatePath(input: string): string {
     throw new FounduError('not_authorized', SCOPE_REFUSAL_MESSAGE);
   }
 
-  if (!decoded.startsWith('/') || decoded.includes('\\') || decoded.includes('\0') || decoded.includes('://') || decoded.startsWith('//')) {
+  if (!decoded.startsWith('/') || decoded.includes('\\') || decoded.includes('\0') || decoded.includes('://') || decoded.startsWith('//')
+    || /[?#%]/.test(decoded)) {
     throw new FounduError('not_authorized', SCOPE_REFUSAL_MESSAGE);
   }
 

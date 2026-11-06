@@ -32,10 +32,10 @@
         },
         {
           "name": "MCP_TRANSPORT",
-          "description": "Transport mode. Set to stdio for local CLI use; the image defaults to http for gateway hosting.",
+          "description": "Transport mode. Fixed to stdio for this package; the image itself defaults to http for gateway hosting.",
           "isRequired": false,
-          "default": "stdio",
-          "format": "string"
+          "format": "string",
+          "value": "stdio"
         },
         {
           "name": "LOG_LEVEL",
