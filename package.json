@@ -1,0 +1,56 @@
+{
+  "name": "@wyre-ai/foundu-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for FoundU roster, hours, and labour-cost aggregates. Pay rates, bank details, tax file numbers, and employee PII are out of scope.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "author": "WYRE Technology",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/WYRE-AI/foundu-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WYRE-AI/foundu-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/WYRE-AI/foundu-mcp/issues"
+  },
+  "keywords": [
+    "foundu",
+    "mcp",
+    "model-context-protocol",
+    "rostering",
+    "workforce",
+    "australia"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "start": "node dist/index.js",
+    "start:http": "MCP_TRANSPORT=http node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^17.4.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@semantic-release/changelog": "7.0.0",
+    "@semantic-release/git": "11.0.1",
+    "@semantic-release/github": "12.0.9",
+    "@types/node": "26.2.0",
+    "semantic-release": "25.0.9",
+    "tsup": "8.5.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "std-env": "4.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
