@@ -1,14 +1,11 @@
 /**
- * Every tool in this server is read-only. `read` is the default surface.
- * `admin` holds the two reports whose output includes per-employee pay
- * figures (labour management, timesheet analysis); it is off unless
- * FOUNDU_TOOL_TIERS names it. The tier machinery is kept identical to the
- * rest of the fleet so Conduit's X-Conduit-Tool-Tiers contract behaves the
- * same here.
+ * Every tool in this server is read-only and `read` tier. The tier machinery
+ * is kept identical to the rest of the fleet so Conduit's
+ * X-Conduit-Tool-Tiers contract behaves the same here.
  */
-export type ToolTier = 'read' | 'admin';
+export type ToolTier = 'read';
 
-export const ALL_TIERS: readonly ToolTier[] = ['read', 'admin'];
+export const ALL_TIERS: readonly ToolTier[] = ['read'];
 
 export const DEFAULT_TIERS: readonly ToolTier[] = ['read'];
 

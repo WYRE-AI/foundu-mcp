@@ -5,7 +5,7 @@ import { ArgumentError } from '../types.js';
 import { idSegment, pathSegment } from '../validate.js';
 import { always, FAKE_TOKEN, jsonResponse, mockFoundu, textOf, TOOL_COUNT } from './helpers.js';
 
-/** Every tier, so the admin-tier reports are exercised too. */
+/** Every tier (v1 has only read). */
 const toolset = () => buildToolset(new Set(ALL_TIERS));
 
 /**
@@ -369,63 +369,6 @@ const ROWS: Row[] = [
       ['page', '1'],
     ],
   },
-  {
-    tool: 'foundu_labour_management_report',
-    args: {
-      duration_custom_range: '2026-10-01,2026-10-31',
-      group_by: ['operation_id', 'month'],
-      filter_employee_ids: [10034],
-      filter_operation_ids: [120, 121],
-      filter_cost_codes: ['PO-1', 'CC9'],
-      filter_office_codes: [1],
-      option_approved_only: true,
-      option_paid_only: false,
-      option_shift_breakdown: true,
-      option_leave_breakdown: true,
-      limit: 500,
-      page: 1,
-    },
-    path: '/api/v2/financial-report-centre/labour-management',
-    query: [
-      ['duration_custom_range', '2026-10-01,2026-10-31'],
-      ['group_by', 'operation_id,month'],
-      ['filter_employee_ids', '10034'],
-      ['filter_operation_ids', '120,121'],
-      ['filter_cost_codes', 'PO-1,CC9'],
-      ['filter_office_codes', '1'],
-      ['option_approved_only', '1'],
-      ['option_shift_breakdown', '1'],
-      ['option_leave_breakdown', '1'],
-      ['limit', '500'],
-      ['page', '1'],
-    ],
-  },
-  {
-    tool: 'foundu_timesheet_analysis_report',
-    args: {
-      filter_date_from: '2026-11-01',
-      filter_date_to: '2026-11-07',
-      filter_employee_ids: [10034, 10035],
-      filter_client_id: 120,
-      filter_roster_id: 278,
-      filter_office_code: 1,
-      include_unapproved_shifts: true,
-      limit: 100,
-      page: 2,
-    },
-    path: '/api/v2/award-interpretation/analyse/time-based',
-    query: [
-      ['filter_date_from', '2026-11-01'],
-      ['filter_date_to', '2026-11-07'],
-      ['filter_employee_ids', '10034,10035'],
-      ['filter_client_id', '120'],
-      ['filter_roster_id', '278'],
-      ['filter_office_code', '1'],
-      ['include_unapproved_shifts', 'true'],
-      ['limit', '100'],
-      ['page', '2'],
-    ],
-  },
 ];
 
 beforeEach(() => {
@@ -467,19 +410,12 @@ describe('endpoint catalog', () => {
   });
 
   it('every declared argument of every tool is exercised by a row', () => {
-    // Mutually exclusive with a param in the row; pinned by its own test below.
-    const coveredElsewhere: Record<string, string[]> = { foundu_labour_management_report: ['duration_specific_date'] };
     for (const tool of toolset().tools) {
       const row = ROWS.find((r) => r.tool === tool.name)!;
       const declared = Object.keys(tool.inputSchema.properties ?? {});
-      const unexercised = declared.filter((k) => !(k in row.args) && !coveredElsewhere[tool.name]?.includes(k));
+      const unexercised = declared.filter((k) => !(k in row.args));
       expect(unexercised, tool.name).toEqual([]);
     }
-  });
-
-  it('foundu_labour_management_report sends duration_specific_date', async () => {
-    const { calls } = await call('foundu_labour_management_report', { duration_specific_date: '2026-11-03', group_by: ['times'] });
-    expect([...calls[0].url.searchParams.entries()]).toEqual([['duration_specific_date', '2026-11-03'], ['group_by', 'times']]);
   });
 });
 
@@ -489,13 +425,6 @@ describe('pagination is passed through, never auto-paged', () => {
     const { res, calls } = await call('foundu_approved_shifts_list', { filterStartDate: '2026-11-01', filterEndDate: '2026-11-07', limit: 1, page: 2 }, body);
     expect(calls).toHaveLength(1);
     expect(calls[0].url.searchParams.get('page')).toBe('2');
-    expect(JSON.parse(textOf(res))).toEqual(body);
-  });
-
-  it('a top-level current_page/last_page response is returned as-is with one call', async () => {
-    const body = { current_page: 1, data: [], from: 1, to: 0, last_page: 9, total: 900, per_page: 100 };
-    const { res, calls } = await call('foundu_timesheet_analysis_report', { filter_date_from: '2026-11-01', filter_date_to: '2026-11-07' }, body);
-    expect(calls).toHaveLength(1);
     expect(JSON.parse(textOf(res))).toEqual(body);
   });
 });
@@ -571,7 +500,6 @@ describe('limits are capped at the vendor maximum', () => {
     ['foundu_rosters_list', {}, 3000],
     ['foundu_operations_list', {}, 1500],
     ['foundu_qualifications_licences_report', {}, 500],
-    ['foundu_labour_management_report', { duration_specific_date: '2026-11-01', group_by: ['date'] }, 3000],
     ['foundu_approved_shifts_list', {}, 1000],
   ])('%s caps limit at %i', async (tool, args, max) => {
     const { calls } = await call(tool, { ...args, limit: 999_999 });
@@ -595,18 +523,11 @@ describe('argument validation (all before any request)', () => {
     ['foundu_clock_logs_list', { filter_date_from: '01/11/2026' }, /wrong format/],
     ['foundu_employees_search', { order: 'name; drop' }, /wrong format/],
     ['foundu_employees_search', { filter_location: ['1,2'] }, /must be an integer/],
-    ['foundu_labour_management_report', { group_by: ['month'], filter_cost_codes: ['a,b'], duration_specific_date: '2026-11-01' }, /must not contain a comma/],
+    ['foundu_locations_list', { statuses: ['active,archived'] }, /must not contain a comma/],
     ['foundu_employees_search', { filter_terminated_employees: 'yes' }, /true or false/],
     ['foundu_employees_search', { filter: 'a\u0000b' }, /control characters/],
     ['foundu_attendance_performance_report', {}, /"duration" is required/],
     ['foundu_attendance_performance_report', { duration: 'custom_date_range', from_date: '2026-10-01' }, /needs from_date and to_date/],
-    ['foundu_labour_management_report', { duration_specific_date: '2026-11-01' }, /"group_by" is required/],
-    ['foundu_labour_management_report', { group_by: ['month'] }, /exactly one of: duration_custom_range, duration_specific_date/],
-    [
-      'foundu_labour_management_report',
-      { group_by: ['month'], duration_specific_date: '2026-11-01', duration_custom_range: '2026-10-01,2026-10-31' },
-      /exactly one of/,
-    ],
     ['foundu_leave_applications_list', { order_direction: 'desc' }, /needs "order"/],
     ['foundu_attendance_performance_report', { duration: 'specific_date_range' }, /must be one of/],
     ['foundu_approved_shifts_list', { filterIds: [123] }, /filterIds needs filterStartDate and filterEndDate/],

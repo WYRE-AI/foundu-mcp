@@ -13,11 +13,10 @@ export const FAKE_S2S_SECRET = 'test-s2s-7Hq2Lw9Zr4Kx8Mv3Nb6Pc1Td5Fg0Yj';
 
 export const API_BASE = 'https://api.foundu.com.au';
 
-/** Every tool, in all tiers. */
-export const TOOL_COUNT = 26;
-/** The default (read tier) surface: every tool except the two pay-figure reports. */
-export const READ_TOOL_COUNT = 24;
-export const ADMIN_TOOLS = ['foundu_labour_management_report', 'foundu_timesheet_analysis_report'];
+/** Every tool. All are read tier. */
+export const TOOL_COUNT = 24;
+/** Per-employee pay reports left out of v1 (a future admin-tier feature). */
+export const REMOVED_PAY_REPORTS = ['foundu_labour_management_report', 'foundu_timesheet_analysis_report'];
 
 export function textOf(result: CallToolResult): string {
   const block = result.content?.[0];

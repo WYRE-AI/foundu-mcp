@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 26 read-only tools over the official foundU API (`https://api.foundu.com.au`): employees, positions, leave history and balances, employee shifts, shift history, clock logs, rosters, approved and unassigned shifts, leave applications and rules, holidays, operations, locations, positions, managers, absence reasons, and the attendance, qualifications, labour-management, and timesheet-analysis reports. The labour-management and timesheet-analysis reports are `admin` tier and off by default, because they return per-employee pay figures; the rest are `read` tier.
+- 24 read-only tools over the official foundU API (`https://api.foundu.com.au`), all `read` tier: employees, positions, leave history and balances, employee shifts, shift history, clock logs, rosters, approved and unassigned shifts, leave applications and rules, holidays, operations, locations, positions, managers, absence reasons, and the attendance and qualifications reports.
 - `possibly_truncated: true` on `{ data: [...] }` results from tools that declare `limit` but no `page`, when the result reaches the `limit` sent or no `limit` was sent. Those tools say in their description that there is no next page. Tools that declare neither `limit` nor `page` (such as `foundu_positions_list`) and results without a `data` array are never marked, so an absent marker does not prove a list is complete.
 - `filterIds` on `foundu_approved_shifts_list` requires `filterStartDate` and `filterEndDate`, as foundU documents.
 - OAuth2 bearer access tokens: `X-FoundU-Access-Token` per request in gateway mode, `FOUNDU_ACCESS_TOKEN` for stdio. The server never refreshes tokens.
@@ -27,4 +27,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The `admin` tier and the two reports in it, `foundu_labour_management_report` and `foundu_timesheet_analysis_report`: both return per-employee pay, which breaks the read-only v1 contract. The README notes them as a possible future admin feature. `FOUNDU_TOOL_TIERS=read,admin` now fails startup.
 - The unpublished scaffold's invented `/api/v1/aggregates/*` tools, `foundu_raw_request`, `foundu_status`, and the per-tenant base URL and static API token settings (`FOUNDU_BASE_URL`, `FOUNDU_API_TOKEN`, `x-foundu-base-url`, `x-foundu-api-token`). None of those paths exist in the foundU API.

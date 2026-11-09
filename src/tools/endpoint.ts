@@ -22,7 +22,6 @@
  */
 import type { Tool, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { founduGet } from '../client.js';
-import type { ToolTier } from '../config.js';
 import { ArgumentError } from '../types.js';
 import { idSegment } from '../validate.js';
 import type { ToolArgs, ToolDef } from './types.js';
@@ -49,8 +48,6 @@ export interface Endpoint {
   query?: Record<string, Param>;
   /** Cross-parameter rules (e.g. "exactly one of"); throws ArgumentError. Runs before any request. */
   validate?: (args: ToolArgs) => void;
-  /** Defaults to `read`. */
-  tier?: ToolTier;
 }
 
 const NO_PAGING_NOTE =
@@ -178,7 +175,7 @@ export function endpointTool(spec: Endpoint): ToolDef {
   };
 
   return {
-    tier: spec.tier ?? 'read',
+    tier: 'read',
     tool,
     paged,
     handler: async (args: ToolArgs, creds) => {

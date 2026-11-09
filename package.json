@@ -1,7 +1,7 @@
 {
   "name": "@wyre-ai/foundu-mcp",
   "version": "0.1.0",
-  "description": "Read-only MCP server for the foundU workforce API: employees, rosters, shifts, timesheets, leave, and labour reports. Payroll records, banking, and tax data are out of scope; reports with per-employee pay figures are admin tier.",
+  "description": "Read-only MCP server for the foundU workforce API: employees, rosters, shifts, timesheets, leave, and workforce reports. Pay figures, payroll records, banking, and tax data are out of scope.",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {

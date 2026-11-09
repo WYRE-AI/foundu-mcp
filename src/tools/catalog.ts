@@ -1,21 +1,19 @@
 /**
- * The 26 foundU endpoints this server exposes, one tool each, all GET.
- * Paths, parameter names, enums, and per-page limits follow the official
- * OpenAPI (https://api.foundu.com.au/api/reference-json, 3.0.1);
+ * The 24 foundU endpoints this server exposes, one tool each, all GET, all
+ * `read` tier. Paths, parameter names, enums, and per-page limits follow the
+ * official OpenAPI (https://api.foundu.com.au/api/reference-json, 3.0.1);
  * review changes against it line by line.
- *
- * Two reports are `admin` tier, off by default: labour management and
- * timesheet analysis return pay figures per employee and per shift, from
- * which an individual's hourly rate follows. Every other tool is `read`.
  *
  * Deliberately NOT exposed: any write (POST/PUT/PATCH/DELETE), and the
  * payroll/identity surface even though it is readable: employee financial
  * details, payslips, paycycles, operation pay rates, deductions, ETP, the
  * payroll-activity and deduction/reimbursement reports, invoice and
  * compliance documents, the visa checklist, and the read-shaped POST
- * /api/v1/accounting/payroll-ledger-map/report. Employee `include` values are
- * allowlisted so hr-details, custom-fields, medical, and contact data cannot
- * be requested.
+ * /api/v1/accounting/payroll-ledger-map/report. The labour-management and
+ * timesheet-analysis reports return pay per employee and per shift, so they
+ * are left out of v1 (a possible future admin-tier feature). Employee
+ * `include` values are allowlisted so hr-details, custom-fields, medical, and
+ * contact data cannot be requested.
  */
 import { ArgumentError } from '../types.js';
 import { endpointTool, type Endpoint, type Param, type StringParam } from './endpoint.js';
@@ -80,13 +78,6 @@ const EMPLOYEE_INCLUDES = [
   'employment-status-history',
 ] as const;
 const EMPLOYEE_INCLUDE_NOTE = 'HR details, custom fields, medical, contact, and onboarding data cannot be requested.';
-
-function requireOneOf(keys: readonly string[]) {
-  return (args: ToolArgs) => {
-    const present = keys.filter((k) => args[k] !== undefined && args[k] !== null);
-    if (present.length !== 1) throw new ArgumentError(`Provide exactly one of: ${keys.join(', ')}.`);
-  };
-}
 
 // ---- approve-shifts (v3) ---------------------------------------------------
 
@@ -451,53 +442,6 @@ const ENDPOINTS: Endpoint[] = [
         'Only this wire name is confirmed. foundU also documents sorting by capture date, qualification name, upload date, and days to expiry without giving their wire names.',
       ),
       limit: limit(500),
-      page,
-    },
-  },
-  {
-    name: 'foundu_labour_management_report',
-    tier: 'admin',
-    description:
-      'Labour management report: hours and labour-cost totals grouped by period, employee, shift, operation, position, or cost code. The last row is the total. Admin tier: grouped or filtered by employee or shift, its Total Pay and Total Hours are per-employee pay figures (pay divided by hours is the hourly rate). Provide exactly one of duration_custom_range or duration_specific_date. Paged.',
-    path: '/api/v2/financial-report-centre/labour-management',
-    query: {
-      duration_custom_range: dateRange('Report window'),
-      duration_specific_date: date('Report a single date'),
-      group_by: {
-        type: 'csv',
-        items: 'string',
-        required: true,
-        enum: ['times', 'month', 'period_end', 'employee_id', 'operation_id', 'position_id', 'date', 'day', 'cost_code', 'shift_id'],
-        description: 'Group rows by these keys (combined).',
-      },
-      filter_employee_ids: ids('employee IDs'),
-      filter_operation_ids: ids('operation IDs'),
-      filter_cost_codes: { type: 'csv', items: 'string', description: 'Only these cost codes or purchase orders.' },
-      filter_office_codes: ids('office code IDs'),
-      option_approved_only: flag('Only approved shifts.'),
-      option_paid_only: flag('Only shifts that have been paid.'),
-      option_shift_breakdown: flag('Split each shift into ordinary and overtime.'),
-      option_leave_breakdown: flag('Break paid leave down by leave type.'),
-      limit: limit(3000),
-      page,
-    },
-    validate: requireOneOf(['duration_custom_range', 'duration_specific_date']),
-  },
-  {
-    name: 'foundu_timesheet_analysis_report',
-    tier: 'admin',
-    description:
-      'Analyse real timesheets by employee, operation, or roster: award-interpreted line items per employee per day (award interpretation, time-based). Admin tier: each line carries hours (qty), the amount paid, and the amount charged, so it exposes per-employee pay; the per-unit pay_rate field is removed but amount divided by qty gives it. Paged with current_page/last_page/per_page.',
-    path: '/api/v2/award-interpretation/analyse/time-based',
-    query: {
-      filter_date_from: date('Start date'),
-      filter_date_to: date('End date'),
-      filter_employee_ids: ids('employee IDs'),
-      filter_client_id: id('Only this operation ID.'),
-      filter_roster_id: id('Only this roster ID.'),
-      filter_office_code: id('Only this office code ID.'),
-      include_unapproved_shifts: flag('Include unapproved shifts.', 'true'),
-      limit: limit(1000),
       page,
     },
   },

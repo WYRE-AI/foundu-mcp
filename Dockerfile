@@ -36,8 +36,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # CONDUIT_S2S_SECRET, which is supplied at runtime by the platform and never
 # baked into the image. AUTH_MODE=gateway never falls back to env credentials;
 # a short-lived access token arrives per request on X-FoundU-Access-Token and
-# the gateway owns refresh. Only the read tier is enabled; the admin tier
-# (per-employee pay-figure reports) needs FOUNDU_TOOL_TIERS=read,admin.
+# the gateway owns refresh. read is the only tool tier.
 ENV NODE_ENV=production \
     LOG_LEVEL=info \
     MCP_TRANSPORT=http \

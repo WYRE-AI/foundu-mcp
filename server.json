@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.WYRE-AI/foundu-mcp",
   "title": "foundU",
-  "description": "Read-only foundU workforce data: employees, rosters, shifts, timesheets, leave, and labour reports.",
+  "description": "Read-only foundU workforce data: employees, rosters, shifts, timesheets, leave, and workforce reports.",
   "repository": {
     "url": "https://github.com/WYRE-AI/foundu-mcp",
     "source": "github"
@@ -26,7 +26,7 @@
         },
         {
           "name": "FOUNDU_TOOL_TIERS",
-          "description": "Comma-separated tool tiers: read (the default), or read,admin to also list the two reports that return per-employee pay figures. The X-Conduit-Tool-Tiers request header can only narrow this set.",
+          "description": "Comma-separated tool tiers. read is the only tier (every tool is read-only). The X-Conduit-Tool-Tiers request header can only narrow this set.",
           "isRequired": false,
           "default": "read",
           "format": "string"

@@ -1,10 +1,10 @@
 # foundU MCP Server
 
-Read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for the [foundU](https://www.foundu.com.au/) workforce API: employees, rosters, shifts, clock logs, timesheets, leave, and the workforce and labour reports.
+Read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for the [foundU](https://www.foundu.com.au/) workforce API: employees, rosters, shifts, clock logs, timesheets, leave, and the attendance and qualifications reports.
 
-- 26 tools, all GET, all annotated `readOnlyHint: true`. 24 are `read` tier. The two reports that return per-employee pay figures are `admin` tier and off by default; see [Pay figures](#pay-figures-admin-tier).
+- 24 tools, all GET, all annotated `readOnlyHint: true`, all `read` tier. The two reports that return per-employee pay are not in v1; see [Not in v1](#not-in-v1-per-employee-pay-reports).
 - Fixed upstream host `https://api.foundu.com.au`. There is no base-URL setting; the tenant is assumed to be implied by the access token (unverified, see [Open before unhiding](#open-before-unhiding)).
-- Payroll endpoints, banking, and tax data are out of scope. See [What is not exposed](#what-is-not-exposed).
+- Pay figures, payroll endpoints, banking, and tax data are out of scope. See [What is not exposed](#what-is-not-exposed).
 
 ## Authentication
 
@@ -52,25 +52,23 @@ When setting up an integration, grant least privilege: People, Rosters, Timeshee
 | `foundu_absence_reasons_list` | `GET /api/v1/reason-list` |
 | `foundu_attendance_performance_report` | `GET /api/v2/workforce-report-centre/attendance-and-performance` |
 | `foundu_qualifications_licences_report` | `GET /api/v2/workforce-report-centre/qualifications-and-licences` |
-| `foundu_labour_management_report` (admin tier) | `GET /api/v2/financial-report-centre/labour-management` |
-| `foundu_timesheet_analysis_report` (admin tier) | `GET /api/v2/award-interpretation/analyse/time-based` |
 
 Parameters follow the [official OpenAPI](https://api.foundu.com.au/api/reference) by name. Every tool validates its arguments before any request:
 
 - Path IDs must be positive integers; `.`/`..`/separators/encoded separators are refused.
-- Enums (statuses, `include` values, report durations, `group_by`) are checked.
+- Enums (statuses, `include` values, report durations) are checked.
 - Dates are `YYYY-MM-DD`; timestamps also accept `YYYY-MM-DD HH:mm:ss`; ranges are `start,end`.
 - `limit` is capped at foundU's documented per-page maximum.
 - Lists foundU documents as comma-separated go on the wire as `a=1,2`; lists it types as arrays go as `a[]=1&a[]=2`.
 - Pagination (`page`, where documented) is passed straight through. No tool fetches more than one page.
-- foundU documents `page` only on locations, the report endpoints, timesheet analysis, and the v3 approve-shifts endpoints. Every other list endpoint takes `limit` alone, so it can never return more than one batch. Those tools say so in their description, and when a result has as many rows as the `limit` sent, or no `limit` was sent (foundU's default is undocumented), the response carries `possibly_truncated: true` and a note telling the model to narrow its filters.
+- foundU documents `page` only on locations, the two report endpoints, and the v3 approve-shifts endpoints. Every other list endpoint takes `limit` alone, so it can never return more than one batch. Those tools say so in their description, and when a result has as many rows as the `limit` sent, or no `limit` was sent (foundU's default is undocumented), the response carries `possibly_truncated: true` and a note telling the model to narrow its filters.
 
 **Unverified:** foundU documents the two `/api/v3/approve-shifts` endpoints as GET with a JSON body. HTTP clients cannot send a body on GET, so their filters are sent as query parameters (with bracket arrays). Laravel normally reads both the same way, but this has not been checked against a live tenant.
 
 ## What is not exposed
 
 - Any write: no POST, PUT, PATCH, or DELETE, including approve/decline shifts, clock start/end, roster changes, and uploads.
-- Employee financial details (TFN, bank, super), payslips, paycycles, operation pay rates, deductions, ETP, the payroll-activity and deduction/reimbursement reports, invoice and compliance documents, the visa checklist, and the read-shaped `POST /api/v1/accounting/payroll-ledger-map/report`.
+- Employee financial details (TFN, bank, super), payslips, paycycles, operation pay rates, deductions, ETP, the labour-management, timesheet-analysis, payroll-activity, and deduction/reimbursement reports, invoice and compliance documents, the visa checklist, and the read-shaped `POST /api/v1/accounting/payroll-ledger-map/report`.
 - Employee `include` values are allowlisted. `hr-details`, `custom-fields`, `current-medical`, contact, and onboarding data cannot be requested. Shift `costing` and documents, and leave attachments, are not offered either.
 
 Every response is also scrubbed by key name before it reaches the model. Ordinary reads embed pay figures (a leave ledger's `payable_rate` and `rate`, a position's `position_base_rate` and `position_casual_rate`, an allowance's `rates`, a part-time position's `annual_salary`), so this is a real control, not only defence in depth. Removed:
@@ -81,14 +79,14 @@ Every response is also scrubbed by key name before it reaches the model. Ordinar
 
 Kept: hours, balances, and counts (a bare `amount` is leave hours in every tool here; `amount_requested`, `leave_rule_amount`, `allowance_qty`), references and labels (`allowance_rate_id`, `pay_rate_type`, `pay_nopay`, `break_is_payable`). Every response field of the 24 endpoints in the official spec was checked against these rules; the scrubber has not yet been run against captured live payloads (see [Open before unhiding](#open-before-unhiding)).
 
-## Pay figures (admin tier)
+## Not in v1: per-employee pay reports
 
-Two reports return pay figures that can be tied to one person:
+v1 is read-only and has only the `read` tier, and no tool returns pay. Two foundU reports were left out because their output is per-employee pay:
 
-- `foundu_labour_management_report` grouped by `employee_id` or `shift_id` (or filtered to one employee) returns `Total Pay` and `Total Hours` per person or per shift. Pay divided by hours is that person's hourly rate.
-- `foundu_timesheet_analysis_report` returns award-interpreted line items per employee per day with `qty`, `amount` (paid), and `charge_amount`. The per-unit `pay_rate` is scrubbed, but `amount / qty` gives it back.
+- `GET /api/v2/financial-report-centre/labour-management` grouped by employee or shift returns `Total Pay` and `Total Hours` per person or per shift (pay divided by hours is that person's hourly rate).
+- `GET /api/v2/award-interpretation/analyse/time-based` returns award-interpreted line items per employee per day with the hours, the amount paid, and the per-unit pay rate.
 
-Both are therefore `admin` tier and are not listed unless `FOUNDU_TOOL_TIERS` includes `admin` (for example `read,admin`). In gateway mode `X-Conduit-Tool-Tiers` can still narrow that per request, so only callers Conduit grants `admin` see them. The container image ships `FOUNDU_TOOL_TIERS=read`.
+They are a possible future **admin-tier** feature. Adding them needs an `admin` tier that is off by default, an explicit customer decision to expose pay data to the model, and a redaction exception scoped to those tools only (the scrubber above would otherwise remove their pay columns).
 
 ## Security contract
 
@@ -110,7 +108,7 @@ See [.env.example](.env.example). The main settings:
 | --- | --- | --- |
 | `FOUNDU_ACCESS_TOKEN` | | Access token for stdio and `AUTH_MODE=env`. Ignored in gateway mode. |
 | `AUTH_MODE` | `env` (image: `gateway`) | `gateway` reads only `X-FoundU-Access-Token`. |
-| `FOUNDU_TOOL_TIERS` | `read` | `read`, or `read,admin` to also list the pay-figure reports. |
+| `FOUNDU_TOOL_TIERS` | `read` | `read` is the only tier. Any other value fails startup. |
 | `CONDUIT_S2S_SECRET` | | Required for HTTP. |
 | `MCP_TRANSPORT` | `stdio` (image: `http`) | |
 | `FOUNDU_MAX_CONCURRENCY` | `4` | Upstream calls in flight per access token (per tenant). |

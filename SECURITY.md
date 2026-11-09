@@ -10,7 +10,7 @@ We aim to acknowledge reports within two business days and provide a remediation
 
 ## Scope
 
-This server is read-only. Do not add tools that write to foundU, or that return payroll records, banking, tax, HR, or medical data (see the README's "What is not exposed"). A tool whose output carries per-employee pay figures must be `admin` tier (see "Pay figures (admin tier)").
+This server is read-only, and v1 has only the `read` tier. Do not add tools that write to foundU, or that return pay figures, payroll records, banking, tax, HR, or medical data (see the README's "What is not exposed" and "Not in v1").
 
 Access tokens are supplied at runtime: `FOUNDU_ACCESS_TOKEN` in stdio mode, or `X-FoundU-Access-Token` from the gateway. This server must never hold or use a refresh token; foundU refresh tokens are one-time use. Do not commit tokens, integration keys, `.env` files, or sample payroll extracts.
 

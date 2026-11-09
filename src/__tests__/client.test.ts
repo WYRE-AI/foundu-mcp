@@ -16,7 +16,6 @@ import {
   mockFoundu,
   sequence,
   textOf,
-  READ_TOOL_COUNT,
   TOOL_COUNT,
   vendorError,
 } from './helpers.js';
@@ -43,9 +42,8 @@ afterEach(() => {
 
 /** Minimal valid arguments for a tool: its required fields, plus any cross-field rule. */
 function minimalArgs(name: string, required: readonly string[]): Record<string, unknown> {
-  const sample: Record<string, unknown> = { duration: 'last_month', group_by: ['month'] };
-  const extra = name === 'foundu_labour_management_report' ? { duration_specific_date: '2026-11-01' } : {};
-  return { ...Object.fromEntries(required.map((k) => [k, sample[k] ?? 1])), ...extra };
+  const sample: Record<string, unknown> = { duration: 'last_month' };
+  return Object.fromEntries(required.map((k) => [k, sample[k] ?? 1]));
 }
 
 describe('upstream request contract', () => {
@@ -431,7 +429,7 @@ describe('credential source', () => {
 });
 
 describe('end to end over MCP (mocked upstream)', () => {
-  it(`tools/list returns ${READ_TOOL_COUNT} read-only tools and tools/call round-trips a read`, async () => {
+  it(`tools/list returns ${TOOL_COUNT} read-only tools and tools/call round-trips a read`, async () => {
     const { calls } = mockFoundu([
       (call) =>
         call.url.pathname === '/api/v2/roster-branches'
@@ -445,7 +443,7 @@ describe('end to end over MCP (mocked upstream)', () => {
     await client.connect(clientSide);
     try {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(READ_TOOL_COUNT);
+      expect(tools).toHaveLength(TOOL_COUNT);
       expect(tools.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false)).toBe(true);
 
       const result = (await client.callTool({ name: 'foundu_rosters_list', arguments: { filter_status: 'Approved', limit: 1 } })) as {
