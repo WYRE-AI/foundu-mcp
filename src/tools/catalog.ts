@@ -13,7 +13,9 @@
  * timesheet-analysis reports return pay per employee and per shift, so they
  * are left out of v1 (a possible future admin-tier feature). Employee
  * `include` values are allowlisted so hr-details, custom-fields, medical, and
- * contact data cannot be requested.
+ * contact data cannot be requested from the employee endpoints. Other
+ * endpoints with include=employee (leave applications) document those
+ * resources in `included`, so redact.ts removes them by type key.
  */
 import { ArgumentError } from '../types.js';
 import { endpointTool, type Endpoint, type Param, type StringParam } from './endpoint.js';

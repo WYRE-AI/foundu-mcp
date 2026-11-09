@@ -5,13 +5,15 @@
  *
  * Two kinds of field are removed by key name, whatever their value:
  * - credentials (access/refresh tokens, client secrets, passwords);
- * - payroll and identity data this server never returns: every pay figure
- *   (see isPayFigure), salary/wages/earnings, tax declaration data, bank
- *   details, superannuation, date of birth, visa, passport, licence numbers,
- *   ABNs, emergency contacts, and medical data. The endpoints that exist to
- *   carry these are not exposed (see tools/catalog.ts), but ordinary reads
- *   still embed some (a leave ledger's `payable_rate`, a position's
- *   `position_casual_rate`, an allowance's `rates`), so this is enforced here.
+ * - payroll and identity data this server never returns: every pay or money
+ *   figure (see isPayFigure), salary/wages/earnings, tax and STP declaration
+ *   data, bank details, superannuation, date of birth, gender, home address,
+ *   visa, passport, licence numbers, background checks, ABNs, emergency
+ *   contacts, medical data, and whole HR/tax/contact side-loads (see
+ *   SENSITIVE_RESOURCES). The endpoints that exist to carry these are not
+ *   exposed (see tools/catalog.ts), but ordinary reads still embed some (a
+ *   leave ledger's `payable_rate`, a position's `position_casual_rate`, an
+ *   allowance's `rates`, a shift's `costing`), so this is enforced here.
  * Hours, leave balances, and quantities are kept: a bare `amount` in the v1
  * surface is leave hours, and `allowance_qty` is a count.
  * The token itself is also caught by exact match (the token in use) and by
@@ -32,6 +34,7 @@ const CREDENTIAL_KEYS = new Set([
   'authtoken',
   'token',
   'integrationkey',
+  'idtoken',
   'xfounduaccesstoken',
   'clockpasscode',
   'passcode',
@@ -63,7 +66,51 @@ const SENSITIVE_TOKENS = new Set([
   'passport',
   'emergency',
   'abn',
+  'password',
+  // STP and residency declarations (employee-stp-compliance).
+  'stp',
+  'income',
+  'resident',
+  'residency',
+  'pensioner',
+  'pensioners',
+  'loan',
+  'palm',
+  // Identity and background checks.
+  'birthday',
+  'gender',
+  'kin',
+  'nok',
+  'wwcc',
+  'police',
+  'citizenship',
 ]);
+
+/** Words that mark a money figure on their own (`cost`, `total_charge`, `Net Pay`), unless the key is a label or reference. */
+const MONEY_TOKENS = new Set(['cost', 'costs', 'costing', 'charge', 'charges', 'price', 'prices', 'fee', 'fees', 'gross', 'net', 'dollar', 'dollars']);
+
+/** A key ending in one of these names a label or a reference, not a figure (`pay_rate_type`, `cost_code`). */
+const LABEL_SUFFIXES = new Set(['type', 'id', 'ids', 'code']);
+
+/**
+ * JSON:API side-loads (`included` keys such as `hr-details-12`) that carry
+ * only HR, tax, contact, medical, or onboarding data. They are removed whole,
+ * because some endpoints (leave applications with include=employee) document
+ * them in `included` even though the employee include allowlist never asks
+ * for them.
+ */
+const SENSITIVE_RESOURCES = [
+  'hr-details',
+  'employee-stp-compliance',
+  'employee-contact',
+  'emergency-contact',
+  'custom-fields',
+  'current-medical',
+  'onboarding-overview',
+];
+
+/** Home-address keys. Business addresses (`office_address`, `postal_address` on an operation) are kept. */
+const HOME_ADDRESS_WORDS = new Set(['address', 'full', 'home', 'residential']);
 
 /** Splits camelCase, snake_case, kebab-case, and "Title Case" keys into lower-case tokens. */
 export function tokensOf(key: string): string[] {
@@ -98,16 +145,18 @@ const PAY_QUALIFIERS = new Set([
 
 /**
  * A pay figure is any rate (`rate`, `rates`, `payable_rate`,
- * `position_casual_rate`, `charge_rate`), a bare `pay`, or a pay/amount
- * word with a pay qualifier (`Total Pay`, `overtime_pay`, `penalty_amount`,
- * `Taxable Allowance Paid`). A trailing `type` or `id` makes it a label or a
- * reference (`pay_rate_type`, `allowance_rate_id`), and unqualified amounts or
- * pay flags (`amount` leave hours, `pay_nopay`, `break_is_payable`) are kept.
+ * `position_casual_rate`, `charge_rate`), any money word (`cost`, `costing`,
+ * `total_charge`, `price`, `fee`, `gross`, `Net Pay`), a bare `pay`, or a
+ * pay/amount word with a pay qualifier (`Total Pay`, `overtime_pay`,
+ * `penalty_amount`, `Taxable Allowance Paid`). A trailing `type`, `id`, or
+ * `code` makes it a label or a reference (`pay_rate_type`,
+ * `allowance_rate_id`, `cost_code`), and unqualified amounts or pay flags
+ * (`amount` leave hours, `pay_nopay`, `break_is_payable`) are kept.
  */
 function isPayFigure(tokens: readonly string[]): boolean {
-  const last = tokens.at(-1);
-  if (last === 'type' || last === 'id' || last === 'ids') return false;
+  if (LABEL_SUFFIXES.has(tokens.at(-1) ?? '')) return false;
   if (tokens.includes('rate') || tokens.includes('rates')) return true;
+  if (tokens.some((t) => MONEY_TOKENS.has(t))) return true;
   if (tokens.length === 1 && tokens[0] === 'pay') return true;
   return tokens.some(
     (t, i) => ['pay', 'payable', 'paid', 'amount', 'amounts'].includes(t) && tokens.some((q, j) => j !== i && PAY_QUALIFIERS.has(q)),
@@ -119,8 +168,12 @@ export function isSensitiveKey(key: string): boolean {
   const tokens = tokensOf(key);
   const has = (t: string) => tokens.includes(t);
   if (tokens.some((t) => SENSITIVE_TOKENS.has(t))) return true;
+  const dashed = tokens.join('-');
+  if (SENSITIVE_RESOURCES.some((r) => dashed === r || dashed.startsWith(`${r}-`))) return true;
   if (isPayFigure(tokens)) return true;
-  if ((has('licence') || has('license')) && has('number')) return true;
+  if ((has('licence') || has('license')) && ['number', 'no', 'num', 'driver', 'drivers'].some(has)) return true;
+  if (has('address') && tokens.every((t) => HOME_ADDRESS_WORDS.has(t))) return true;
+  if (has('holiday') && has('maker')) return true;
   if (has('bank') || has('banking')) return true;
   if (has('account') && (has('number') || has('name') || has('bsb'))) return true;
   if (has('date') && has('birth')) return true;
@@ -171,20 +224,32 @@ function isPage(value: unknown): value is Page {
   return !!value && typeof value === 'object' && !Array.isArray(value) && Array.isArray((value as Page).data);
 }
 
+const INCLUDED_DROPPED =
+  ' The side-loaded `included` records alone exceeded the size cap and were dropped: repeat with fewer include values or a smaller limit to get them.';
+
 /**
  * Fits a list page under the cap by dropping `data` items from the end while
  * keeping every other top-level field (meta, pagination, totals), so the
- * model can still page. Returns undefined when even an empty `data` does not
- * fit.
+ * model can still page. If the side-loaded `included` block alone is too big,
+ * it is dropped too (and the hint says so) rather than cutting the JSON and
+ * losing `meta`. Returns undefined when even an empty `data` does not fit.
  */
 function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string, paged: boolean): string | undefined {
+  const fitted = fitItems(page, maxChars, render, paged, '');
+  if (fitted !== undefined || !('included' in page)) return fitted;
+  const { included: _included, ...withoutIncluded } = page;
+  return fitItems(withoutIncluded as Page, maxChars, render, paged, INCLUDED_DROPPED);
+}
+
+function fitItems(page: Page, maxChars: number, render: (v: unknown) => string, paged: boolean, note: string): string | undefined {
   const total = page.data.length;
-  const hint = (n: number) =>
+  const itemsHint = (n: number) =>
     paged
       ? `Only the first ${n} of ${total} items in this page fit in the response. Moving to the next page skips the rest: ` +
         `to see them, repeat this request with a smaller limit (at most ${Math.max(n, 1)}).`
       : `Only the first ${n} of ${total} items fit in the response, and this endpoint has no paging: ` +
         'to see the rest, narrow the filters or date window.';
+  const hint = (n: number) => (n < total ? itemsHint(n) + note : `All ${total} items are returned.${note}`);
   const build = (n: number) =>
     render({
       ...page,
@@ -196,8 +261,9 @@ function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string
     });
   if (build(0).length > maxChars) return undefined;
   // Output length only grows with n, so binary-search the largest n that fits.
+  // n = total can fit once `included` has been dropped.
   let lo = 0;
-  let hi = total - 1;
+  let hi = total;
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     if (build(mid).length <= maxChars) lo = mid;

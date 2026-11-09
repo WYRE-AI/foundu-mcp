@@ -91,6 +91,61 @@ describe('field-level redaction (defence in depth)', () => {
     'tax_free_threshold_from_employer',
     'withhold_tax',
     'medicare_levy_surcharge',
+    // Money words other than pay: cost, charge, price, fee, gross, net.
+    'cost',
+    'costs',
+    'costing',
+    'shift_costing',
+    'shift_cost',
+    'total_cost',
+    'labour_cost',
+    'TotalCost',
+    'gross',
+    'gross_v2',
+    'net',
+    'Net Pay',
+    'price',
+    'charge',
+    'total_charge',
+    'Charge Out Standard',
+    'fee',
+    'dollar_value',
+    // STP and residency declarations (employee-stp-compliance attributes).
+    'training_support_loan',
+    'seniors_pensioners',
+    'resident_status',
+    'resident_status_code',
+    'is_resident',
+    'working_holiday_maker_registered_employer',
+    'palm_approved_employer',
+    'income_type',
+    'income_type_code',
+    // Identity data.
+    'birthday',
+    'gender',
+    'gender_detail',
+    'address',
+    'full_address',
+    'home_address',
+    'next_of_kin',
+    'nok_name',
+    'licence_no',
+    'drivers_licence',
+    'wwcc_number',
+    'police_check',
+    'police_clearance_check',
+    'citizenship',
+    'id_token',
+    'idToken',
+    'password_hash',
+    // Side-loaded JSON:API resources that carry only HR, tax, contact, or medical data.
+    'hr-details-12',
+    'employee-stp-compliance-12',
+    'employee-contact-12',
+    'emergency-contact-12',
+    'custom-fields-12',
+    'current-medical-12',
+    'onboarding-overview-12',
   ])('treats %j as sensitive', (key) => {
     expect(isSensitiveKey(key)).toBe(true);
   });
@@ -104,7 +159,6 @@ describe('field-level redaction (defence in depth)', () => {
     'state_id',
     'Total Hours',
     'Overtime Hours',
-    'Charge Out Standard',
     'employee_id',
     'supervisor',
     'position_title',
@@ -127,6 +181,22 @@ describe('field-level redaction (defence in depth)', () => {
     'break_is_payable',
     'is_monthly_pay',
     'payment_type',
+    // Counts, codes, business addresses, and labels next to the new money and identity rules.
+    'total',
+    'cost_code',
+    'Cost code',
+    'cost_centre_id',
+    'licence_type',
+    'licence_state',
+    'licence_expiry',
+    'office_address',
+    'postal_address',
+    'holiday_id',
+    'is_holiday',
+    'casual_loading',
+    'employee-12',
+    'location-12',
+    'current-positions-12',
   ])('keeps %j (directory, hours, and label data)', (key) => {
     expect(isSensitiveKey(key)).toBe(false);
   });
@@ -213,16 +283,53 @@ describe('pay figures in real v1 responses are removed', () => {
     expect(render(body).included['current-positions-1'].attributes.positions[0]).toEqual({ position_id: 6, payment_type: 'hourly', rate: REDACTED });
   });
 
-  it('foundu_employees_search: tax declaration fields go', () => {
-    const body = { data: [{ id: 1, name: 'A. Worker', has_tax_file_number: 1, tax_free_threshold_from_employer: 1, medicare_levy_surcharge: 0, foreign_tax_rate_percent: '25' }] };
-    expect(render(body).data[0]).toEqual({
-      id: 1,
-      name: 'A. Worker',
-      has_tax_file_number: REDACTED,
-      tax_free_threshold_from_employer: REDACTED,
-      medicare_levy_surcharge: REDACTED,
-      foreign_tax_rate_percent: REDACTED,
+  it('foundu_approved_shifts_list: the untyped costing array goes, the approved time stays', () => {
+    const shift = { id: 123, approved_time: { approved_duration: 5.87 }, costing: [{ cost: 312.5, total: 340.1 }], shift_costing: [{ id: 175, invoicing_po_id: 3 }] };
+    const out = render({ success: true, data: [shift], meta: { pagination: { total: 878 } } });
+    expect(out.data[0]).toEqual({ id: 123, approved_time: shift.approved_time, costing: REDACTED, shift_costing: REDACTED });
+    expect(out.meta.pagination.total).toBe(878);
+  });
+
+  it('foundu_leave_applications_list with include=employee: side-loaded HR, tax, contact, and custom-field resources go', () => {
+    // The `included` shape the spec documents for GET /api/v1/leave/leave-applications.
+    const stp = {
+      income_type_code: 'SAW',
+      income_type: 'Salary and Wages',
+      foreign_tax_rate_percent: '25',
+      is_resident: true,
+      resident_status: 'Working holiday maker',
+      resident_status_code: 'working_holiday_maker',
+      training_support_loan: true,
+      medicare_levy_surcharge: 0,
+      has_tax_file_number: true,
+      tax_free_threshold_from_employer: true,
+      working_holiday_maker_registered_employer: true,
+      palm_approved_employer: false,
+      seniors_pensioners: false,
+    };
+    const body = {
+      data: [{ type: 'employee-leave', id: 7, attributes: { amount_requested: 22.6, status: 'approved' } }],
+      included: {
+        'employee-1': { type: 'employee', id: 1, attributes: { first_name: 'A.', last_name: 'Worker' } },
+        'employee-stp-compliance-1': { type: 'employee-stp-compliance', id: 1, attributes: stp },
+        'hr-details-1': { type: 'hr-details', id: 1, attributes: { title: 'Mr', gender: 'male', address: { full_address: '1 Example St' }, dob: '1991-01-01' } },
+        'employee-contact-1': { type: 'employee-contact', id: 1, attributes: { mobile: '0400 000 000' } },
+        'custom-fields-1': { type: 'custom-fields', id: 1, attributes: { data: { 'field 1': 'x' } } },
+        'branch-4': { type: 'branch', id: 4, attributes: { title: 'Warehouse' } },
+      },
+    };
+    const out = render(body);
+    expect(out.data).toEqual(body.data);
+    expect(out.included).toEqual({
+      'employee-1': body.included['employee-1'],
+      'employee-stp-compliance-1': REDACTED,
+      'hr-details-1': REDACTED,
+      'employee-contact-1': REDACTED,
+      'custom-fields-1': REDACTED,
+      'branch-4': body.included['branch-4'],
     });
+    // Defence in depth: the same STP fields are removed wherever they appear.
+    expect(Object.values(render({ data: [stp] }).data[0]).every((v) => v === REDACTED)).toBe(true);
   });
 
   it('leave applications and history keep their hours', () => {
@@ -244,6 +351,17 @@ describe('rendering', () => {
     expect(out.data.length).toBeGreaterThan(0);
     expect(out.data.length).toBeLessThan(200);
     expect(out.truncation_hint).toMatch(/smaller limit/);
+  });
+
+  it('drops an oversized `included` and keeps the pagination block when side-loads alone exceed the cap', () => {
+    const included = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`branch-${i}`, { attributes: { title: 'y'.repeat(50) } }]));
+    const page = { data: Array.from({ length: 20 }, (_, i) => ({ id: i })), included, meta: { pagination: { current_page: 1, last_page: 4 } } };
+    const out = JSON.parse(renderSafe(page, 2000, [], { paged: true }));
+    expect(out.included).toBeUndefined();
+    expect(out.meta).toEqual(page.meta);
+    expect(out.data).toEqual(page.data);
+    expect(out.truncated).toBe(true);
+    expect(out.truncation_hint).toMatch(/included/);
   });
 
   it('for an endpoint without paging, the shrink hint never points at a next page', () => {
