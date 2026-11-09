@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 26 read-only tools over the official foundU API (`https://api.foundu.com.au`): employees, positions, leave history and balances, employee shifts, shift history, clock logs, rosters, approved and unassigned shifts, leave applications and rules, holidays, operations, locations, positions, managers, absence reasons, and the attendance, qualifications, labour-management, and timesheet-analysis reports. All are `read` tier.
+- 26 read-only tools over the official foundU API (`https://api.foundu.com.au`): employees, positions, leave history and balances, employee shifts, shift history, clock logs, rosters, approved and unassigned shifts, leave applications and rules, holidays, operations, locations, positions, managers, absence reasons, and the attendance, qualifications, labour-management, and timesheet-analysis reports. The labour-management and timesheet-analysis reports are `admin` tier and off by default, because they return per-employee pay figures; the rest are `read` tier.
+- `possibly_truncated: true` on results from list endpoints that have no `page` parameter, when the result reaches the `limit` sent or no `limit` was sent. Those tools say in their description that there is no next page.
+- `filterIds` on `foundu_approved_shifts_list` requires `filterStartDate` and `filterEndDate`, as foundU documents.
 - OAuth2 bearer access tokens: `X-FoundU-Access-Token` per request in gateway mode, `FOUNDU_ACCESS_TOKEN` for stdio. The server never refreshes tokens.
 - Template security contract: fixed origin and exact-path check, `redirect: "manual"`, path-ID validation and encoding, enum/date/limit validation, bounded upstream reads, credential and payroll-field redaction in output and logs, fail-closed S2S startup, gateway-mode lock, and `X-Conduit-Tool-Tiers` narrowing.
-- Conservative throttling (`FOUNDU_MAX_CONCURRENCY`) and bounded retry on 429/503.
+- Key-name redaction also covers a bare `rate`, award/loading/cost rates, passport, licence numbers, ABNs, emergency contacts, and tax scales. `*_rate_type` labels such as `pay_rate_type` are kept.
+- Conservative throttling per access token (`FOUNDU_MAX_CONCURRENCY`), so one tenant never queues behind another, and bounded retry on 429/503 that releases its permit while backing off. One deadline (`FOUNDU_REQUEST_TIMEOUT_MS`) covers queueing, every attempt, and backoff, and a cancelled call leaves the queue at once.
 - Stdio smoke test, destructive-tool lint, mcp-assert evals, gitleaks workflow, and CODEOWNERS.
 
 ### Changed
