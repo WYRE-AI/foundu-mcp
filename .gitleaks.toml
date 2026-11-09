@@ -15,4 +15,6 @@ regexes = [
   '''^foundu-test-access-token-b-not-real-0987654321$''',
   '''^foundu-eval-token-not-real-0000$''',
   '''^test-s2s-7Hq2Lw9Zr4Kx8Mv3Nb6Pc1Td5Fg0Yj$''',
+  # JWT_LIKE in redact.test.ts and client.test.ts; the signature decodes to "signature-not-real-123456".
+  '''^eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.c2lnbmF0dXJlLW5vdC1yZWFsLTEyMzQ1Ng$''',
 ]
