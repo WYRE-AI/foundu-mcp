@@ -1,0 +1,24 @@
+name: mcp-assert
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  assert:
+    permissions:
+      contents: read
+      packages: read
+    uses: wyre-technology/.github/.github/workflows/mcp-assert.yml@06856d54d8829929e387523e6c1767d54416e978 # main
+    with:
+      entry: dist/index.js
+      # The harness calls the canary with no credentials and expects isError.
+      # foundu_states_list needs an access token, so it errors without a call.
+      canary-tool: foundu_states_list
+      extra-suite: evals

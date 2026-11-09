@@ -1,0 +1,16 @@
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { ToolTier } from '../config.js';
+import type { FounduCredentials } from '../types.js';
+
+export type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+
+export type ToolArgs = Record<string, unknown>;
+
+export interface ToolDef {
+  tier: ToolTier;
+  tool: Tool;
+  /** True when the tool takes a `page` argument; decides what an oversized result's truncation hint suggests. */
+  paged: boolean;
+  /** Receives only the arguments declared in `tool.inputSchema.properties`. Returns a JSON-serializable value; output is redacted and truncated by the dispatcher. */
+  handler: (args: ToolArgs, creds: FounduCredentials) => Promise<unknown>;
+}

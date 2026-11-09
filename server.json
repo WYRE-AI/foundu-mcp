@@ -1,0 +1,72 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.WYRE-AI/foundu-mcp",
+  "title": "foundU",
+  "description": "Read-only foundU workforce data: employees, rosters, shifts, timesheets, leave, and reports.",
+  "repository": {
+    "url": "https://github.com/WYRE-AI/foundu-mcp",
+    "source": "github"
+  },
+  "version": "0.0.0",
+  "websiteUrl": "https://github.com/WYRE-AI/foundu-mcp",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/wyre-ai/foundu-mcp:0.0.0",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:{MCP_HTTP_PORT}/mcp",
+        "headers": [
+          {
+            "name": "X-Gateway-S2S",
+            "description": "Service-to-service proof, t=<unix seconds>,v1=<hex HMAC-SHA256 of 't=<unix seconds>' keyed with CONDUIT_S2S_SECRET>, minted per request by the WYRE MCP Gateway. Requests without a valid, fresh proof get 401.",
+            "isRequired": true,
+            "isSecret": true
+          },
+          {
+            "name": "X-FoundU-Access-Token",
+            "description": "The tenant's short-lived foundU OAuth2 access token, without a 'Bearer ' prefix. Read per request in AUTH_MODE=gateway (the image default); this server never refreshes it.",
+            "isRequired": true,
+            "isSecret": true
+          }
+        ]
+      },
+      "environmentVariables": [
+        {
+          "name": "CONDUIT_S2S_SECRET",
+          "description": "Per-vendor S2S secret provisioned by the WYRE MCP Gateway (openssl rand -hex 32). The image refuses to start without a real one.",
+          "isRequired": true,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MCP_HTTP_PORT",
+          "description": "Port the HTTP transport listens on inside the container.",
+          "isRequired": false,
+          "default": "8080",
+          "format": "number"
+        },
+        {
+          "name": "MCP_ALLOWED_HOSTS",
+          "description": "Optional comma-separated Host header allowlist for /mcp.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "FOUNDU_TOOL_TIERS",
+          "description": "Comma-separated tool tiers. read is the only tier (every tool is read-only). The X-Conduit-Tool-Tiers request header can only narrow this set.",
+          "isRequired": false,
+          "default": "read",
+          "format": "string"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "description": "Log verbosity: debug, info, warn, error",
+          "isRequired": false,
+          "default": "info",
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
