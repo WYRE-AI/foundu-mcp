@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.WYRE-AI/foundu-mcp",
   "title": "foundU",
-  "description": "Read-only foundU workforce data: employees, rosters, shifts, timesheets, leave, and workforce reports.",
+  "description": "Read-only foundU workforce data: employees, rosters, shifts, timesheets, leave, and reports.",
   "repository": {
     "url": "https://github.com/WYRE-AI/foundu-mcp",
     "source": "github"
@@ -14,14 +14,42 @@
       "registryType": "oci",
       "identifier": "ghcr.io/wyre-ai/foundu-mcp:0.0.0",
       "transport": {
-        "type": "stdio"
+        "type": "streamable-http",
+        "url": "http://localhost:{MCP_HTTP_PORT}/mcp",
+        "headers": [
+          {
+            "name": "X-Gateway-S2S",
+            "description": "Service-to-service proof, t=<unix seconds>,v1=<hex HMAC-SHA256 of 't=<unix seconds>' keyed with CONDUIT_S2S_SECRET>, minted per request by the WYRE MCP Gateway. Requests without a valid, fresh proof get 401.",
+            "isRequired": true,
+            "isSecret": true
+          },
+          {
+            "name": "X-FoundU-Access-Token",
+            "description": "The tenant's short-lived foundU OAuth2 access token, without a 'Bearer ' prefix. Read per request in AUTH_MODE=gateway (the image default); this server never refreshes it.",
+            "isRequired": true,
+            "isSecret": true
+          }
+        ]
       },
       "environmentVariables": [
         {
-          "name": "FOUNDU_ACCESS_TOKEN",
-          "description": "foundU OAuth2 access token (short-lived). This server never refreshes it; foundU refresh tokens are one-time use.",
+          "name": "CONDUIT_S2S_SECRET",
+          "description": "Per-vendor S2S secret provisioned by the WYRE MCP Gateway (openssl rand -hex 32). The image refuses to start without a real one.",
           "isRequired": true,
           "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MCP_HTTP_PORT",
+          "description": "Port the HTTP transport listens on inside the container.",
+          "isRequired": false,
+          "default": "8080",
+          "format": "number"
+        },
+        {
+          "name": "MCP_ALLOWED_HOSTS",
+          "description": "Optional comma-separated Host header allowlist for /mcp.",
+          "isRequired": false,
           "format": "string"
         },
         {
@@ -29,20 +57,6 @@
           "description": "Comma-separated tool tiers. read is the only tier (every tool is read-only). The X-Conduit-Tool-Tiers request header can only narrow this set.",
           "isRequired": false,
           "default": "read",
-          "format": "string"
-        },
-        {
-          "name": "MCP_TRANSPORT",
-          "description": "Set to 'stdio' for local CLI use; the image defaults to 'http' for gateway hosting.",
-          "isRequired": false,
-          "default": "stdio",
-          "format": "string"
-        },
-        {
-          "name": "AUTH_MODE",
-          "description": "Credential source: 'env' reads FOUNDU_ACCESS_TOKEN locally; 'gateway' expects the X-FoundU-Access-Token header from the WYRE MCP Gateway and never reads env.",
-          "isRequired": false,
-          "default": "env",
           "format": "string"
         },
         {
