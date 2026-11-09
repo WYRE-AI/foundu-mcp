@@ -73,7 +73,13 @@ Parameters follow the [official OpenAPI](https://api.foundu.com.au/api/reference
 - Employee financial details (TFN, bank, super), payslips, paycycles, operation pay rates, deductions, ETP, the payroll-activity and deduction/reimbursement reports, invoice and compliance documents, the visa checklist, and the read-shaped `POST /api/v1/accounting/payroll-ledger-map/report`.
 - Employee `include` values are allowlisted. `hr-details`, `custom-fields`, `current-medical`, contact, and onboarding data cannot be requested. Shift `costing` and documents, and leave attachments, are not offered either.
 
-As defence in depth, every response is also scrubbed by key name before it reaches the model: tax file numbers and tax scales, bank and account numbers, superannuation, pay rates (a bare `rate`, and pay, hourly, base, penalty, overtime, ordinary, award, loading, and cost rates), salary and wages, date of birth, visa, passport, licence numbers, ABNs, emergency contacts, medical fields, and any credential field. `*_rate_type` labels (Ordinary/Overtime) are kept. The scrubber works on key names only and has not been checked against live foundU payloads; the endpoint and `include` allowlists are the primary control.
+Every response is also scrubbed by key name before it reaches the model. Ordinary reads embed pay figures (a leave ledger's `payable_rate` and `rate`, a position's `position_base_rate` and `position_casual_rate`, an allowance's `rates`, a part-time position's `annual_salary`), so this is a real control, not only defence in depth. Removed:
+
+- every rate: any key with a `rate` or `rates` word (`rate`, `payable_rate`, `position_casual_rate`, `rate_unloaded`, `charge_rate`, `foreign_tax_rate_percent`);
+- pay and money amounts: a bare `pay`, and any `pay`, `payable`, `paid`, or `amount` key qualified by pay, payable, paid, total, gross, net, base, ordinary, casual, penalty, allowance, overtime, loading, hourly, cost, reimbursement, or deduction (`Total Pay`, `overtime_pay`, `penalty_amount`, `Taxable Allowance Paid`);
+- salary, wages, and earnings; tax declaration data (any `tax` key, Medicare); bank and account numbers; superannuation; date of birth, visa, passport, licence numbers, ABNs, emergency contacts, medical fields; and any credential field.
+
+Kept: hours, balances, and counts (a bare `amount` is leave hours in every tool here; `amount_requested`, `leave_rule_amount`, `allowance_qty`), references and labels (`allowance_rate_id`, `pay_rate_type`, `pay_nopay`, `break_is_payable`). Every response field of the 24 endpoints in the official spec was checked against these rules; the scrubber has not yet been run against captured live payloads (see [Open before unhiding](#open-before-unhiding)).
 
 ## Pay figures (admin tier)
 

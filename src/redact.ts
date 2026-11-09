@@ -5,15 +5,15 @@
  *
  * Two kinds of field are removed by key name, whatever their value:
  * - credentials (access/refresh tokens, client secrets, passwords);
- * - payroll and identity data this server never needs: tax file numbers
- *   and tax scales, bank details, superannuation, pay rates, salary/wages,
- *   date of birth, visa, passport, licence numbers, ABNs, emergency
- *   contacts, and medical data. The endpoints and includes that carry these are
- *   already excluded (see tools/catalog.ts); this is defence in depth.
- * Figures such as "Total Pay", "Total Hours", `amount`, and `qty` are kept:
- * they are the point of the admin-tier reports. Grouped or filtered by
- * employee, they are per-employee pay, which is why those reports are admin
- * tier and off by default.
+ * - payroll and identity data this server never returns: every pay figure
+ *   (see isPayFigure), salary/wages/earnings, tax declaration data, bank
+ *   details, superannuation, date of birth, visa, passport, licence numbers,
+ *   ABNs, emergency contacts, and medical data. The endpoints that exist to
+ *   carry these are not exposed (see tools/catalog.ts), but ordinary reads
+ *   still embed some (a leave ledger's `payable_rate`, a position's
+ *   `position_casual_rate`, an allowance's `rates`), so this is enforced here.
+ * Hours, leave balances, and quantities are kept: a bare `amount` in the v1
+ * surface is leave hours, and `allowance_qty` is a count.
  * The token itself is also caught by exact match (the token in use) and by
  * shape (Bearer headers and JWTs).
  */
@@ -50,13 +50,16 @@ const SENSITIVE_TOKENS = new Set([
   'salaries',
   'wage',
   'wages',
+  'earning',
+  'earnings',
   'payrate',
   'payrates',
+  'tax',
+  'medicare',
   'dob',
   'birthdate',
   'visa',
   'medical',
-  'medicare',
   'passport',
   'emergency',
   'abn',
@@ -71,16 +74,52 @@ export function tokensOf(key: string): string[] {
     .filter(Boolean);
 }
 
-const RATE_QUALIFIERS = ['pay', 'hour', 'hourly', 'base', 'penalty', 'overtime', 'ordinary', 'loaded', 'average', 'award', 'loading', 'cost'];
+/** Words that make a `pay` or `amount` field a money figure rather than hours or a label. */
+const PAY_QUALIFIERS = new Set([
+  'pay',
+  'payable',
+  'paid',
+  'total',
+  'gross',
+  'net',
+  'base',
+  'ordinary',
+  'casual',
+  'penalty',
+  'allowance',
+  'allowances',
+  'overtime',
+  'loading',
+  'hourly',
+  'cost',
+  'reimbursement',
+  'deduction',
+]);
+
+/**
+ * A pay figure is any rate (`rate`, `rates`, `payable_rate`,
+ * `position_casual_rate`, `charge_rate`), a bare `pay`, or a pay/amount
+ * word with a pay qualifier (`Total Pay`, `overtime_pay`, `penalty_amount`,
+ * `Taxable Allowance Paid`). A trailing `type` or `id` makes it a label or a
+ * reference (`pay_rate_type`, `allowance_rate_id`), and unqualified amounts or
+ * pay flags (`amount` leave hours, `pay_nopay`, `break_is_payable`) are kept.
+ */
+function isPayFigure(tokens: readonly string[]): boolean {
+  const last = tokens.at(-1);
+  if (last === 'type' || last === 'id' || last === 'ids') return false;
+  if (tokens.includes('rate') || tokens.includes('rates')) return true;
+  if (tokens.length === 1 && tokens[0] === 'pay') return true;
+  return tokens.some(
+    (t, i) => ['pay', 'payable', 'paid', 'amount', 'amounts'].includes(t) && tokens.some((q, j) => j !== i && PAY_QUALIFIERS.has(q)),
+  );
+}
 
 export function isSensitiveKey(key: string): boolean {
   if (CREDENTIAL_KEYS.has(key.toLowerCase().replace(/[\s_-]/g, ''))) return true;
   const tokens = tokensOf(key);
   const has = (t: string) => tokens.includes(t);
   if (tokens.some((t) => SENSITIVE_TOKENS.has(t))) return true;
-  // A bare `rate`, or a qualified one; `*_rate_type` (e.g. pay_rate_type: ordinary/overtime) is a label, not a rate.
-  if (has('rate') && tokens.at(-1) !== 'type' && (tokens.length === 1 || RATE_QUALIFIERS.some(has))) return true;
-  if (has('tax') && (has('file') || has('number') || has('scale'))) return true;
+  if (isPayFigure(tokens)) return true;
   if ((has('licence') || has('license')) && has('number')) return true;
   if (has('bank') || has('banking')) return true;
   if (has('account') && (has('number') || has('name') || has('bsb'))) return true;

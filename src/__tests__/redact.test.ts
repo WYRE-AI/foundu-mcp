@@ -57,6 +57,40 @@ describe('field-level redaction (defence in depth)', () => {
     'emergency_contact_phone',
     'abn',
     'tax_scale',
+    // Every pay-bearing figure: any rate, and pay or amount fields with a pay qualifier.
+    'payable_rate',
+    'position_casual_rate',
+    'position_base_rate',
+    'rate_unloaded',
+    'charge_rate',
+    'rates',
+    'foreign_tax_rate_percent',
+    'annual_salary',
+    'pay',
+    'Total Pay',
+    'Total Pay Overtime',
+    'gross_pay',
+    'net_pay',
+    'base_pay',
+    'overtime_pay',
+    'penalty_pay',
+    'casual_pay',
+    'payable_amount',
+    'paid_amount',
+    'total_amount',
+    'penalty_amount',
+    'allowance_amount',
+    'overtime_amount',
+    'casual_loading_amount',
+    'base_amount',
+    'Taxable Allowance Paid',
+    'Ordinary Time Earnings',
+    'earnings',
+    // Tax declaration data.
+    'has_tax_file_number',
+    'tax_free_threshold_from_employer',
+    'withhold_tax',
+    'medicare_levy_surcharge',
   ])('treats %j as sensitive', (key) => {
     expect(isSensitiveKey(key)).toBe(true);
   });
@@ -69,10 +103,7 @@ describe('field-level redaction (defence in depth)', () => {
     'status',
     'state_id',
     'Total Hours',
-    'Total Pay',
-    'Total Pay Overtime',
-    'Ordinary Time Earnings',
-    'Taxable Allowance Paid',
+    'Overtime Hours',
     'Charge Out Standard',
     'employee_id',
     'supervisor',
@@ -83,7 +114,20 @@ describe('field-level redaction (defence in depth)', () => {
     'rate_type',
     'licence_type',
     'qualification_name',
-  ])('keeps %j (directory and aggregate data)', (key) => {
+    // Hours, quantities, IDs, and yes/no labels that only sound like pay.
+    'amount',
+    'amount_requested',
+    'leave_rule_amount',
+    'allowance_qty',
+    'allowance_rate_id',
+    'allowance_id',
+    'pay_nopay',
+    'pay_or_nopay',
+    'leave_pay_nopay',
+    'break_is_payable',
+    'is_monthly_pay',
+    'payment_type',
+  ])('keeps %j (directory, hours, and label data)', (key) => {
     expect(isSensitiveKey(key)).toBe(false);
   });
 
@@ -100,40 +144,90 @@ describe('field-level redaction (defence in depth)', () => {
     expect(JSON.stringify(input)).toBe(snapshot);
   });
 
-  it('keeps labour-report totals: they are the point of that report', () => {
-    const row = { 'Total Hours': '3.00', 'Total Pay': '96.00', 'Total Charge Out': '120.00', 'Overtime Hours': '0.00' };
-    expect(JSON.parse(renderSafe({ data: [row] }, 10_000))).toEqual({ data: [row] });
+  it('removes pay totals from report rows and keeps hours', () => {
+    const row = { 'Total Hours': '3.00', 'Total Pay': '96.00', 'Total Pay Overtime': '0.00', 'Overtime Hours': '0.00', 'Ordinary Time Earnings': '96.00' };
+    expect(JSON.parse(renderSafe({ data: [row] }, 10_000))).toEqual({
+      data: [{ 'Total Hours': '3.00', 'Total Pay': REDACTED, 'Total Pay Overtime': REDACTED, 'Overtime Hours': '0.00', 'Ordinary Time Earnings': REDACTED }],
+    });
   });
 });
 
-describe('timesheet-analysis line item (shape from the official spec)', () => {
-  // GET /api/v2/award-interpretation/analyse/time-based: data[].data[weekEnding].data[day].data[] line items.
-  const line = {
-    type: 'line_item',
-    type_secondary: 'Morning shift S-1',
-    pay_rate_type: 'ordinary',
-    label: 'Ordinary hours',
-    qty: 7.6,
-    pay_rate: 26.5,
-    charge_rate: 13.5,
-    amount: 565.5,
-    charge_amount: 600,
-    award: 'Store Clerk Award 2025',
-    position_id: 413,
-  };
-  const body = { current_page: 1, data: [{ data: { '2026-11-08': { data: { '2026-11-04': { data: [line] } } } } }], last_page: 1 };
+/**
+ * Response shapes from the official foundU spec for the tools this server
+ * exposes, with the spec's own example values. Every pay figure must come
+ * back as [REDACTED]; hours, balances, IDs, and labels must survive.
+ */
+describe('pay figures in real v1 responses are removed', () => {
+  const render = (body: unknown) => JSON.parse(renderSafe(body, 1_000_000));
 
-  it('removes the per-unit pay rate and keeps the Ordinary/Overtime label', () => {
-    const out = JSON.parse(renderSafe(body, 100_000));
-    const item = out.data[0].data['2026-11-08'].data['2026-11-04'].data[0];
-    expect(item.pay_rate).toBe(REDACTED);
-    expect(item.pay_rate_type).toBe('ordinary');
+  it('foundu_positions_list: position base and casual rates', () => {
+    const body = { data: [{ id: 6, title: 'Process Worker Level 1', position_base_rate: 21.57, position_casual_rate: 26.96, is_no_pay_award: 0 }] };
+    expect(render(body).data[0]).toEqual({ id: 6, title: 'Process Worker Level 1', position_base_rate: REDACTED, position_casual_rate: REDACTED, is_no_pay_award: 0 });
   });
 
-  it('keeps qty and amount: the report is admin tier because it exposes per-employee pay', () => {
-    const item = JSON.parse(renderSafe(body, 100_000)).data[0].data['2026-11-08'].data['2026-11-04'].data[0];
-    expect(item.qty).toBe(7.6);
-    expect(item.amount).toBe(565.5);
+  it('foundu_employee_leave_balances_get: payable_rate and rate go, the leave balance stays', () => {
+    const ledger = {
+      amount: '105.3570',
+      leave_loading: '0.007',
+      accrual_limit: '3.6500',
+      entitlement_value: '0.0769',
+      payable_rate: 45.5488,
+      rate: 28.92,
+      leave_rule: { title: 'Annual Leave', pay_nopay: 'pay', display_payslip: 1 },
+    };
+    const body = { data: [{ type: 'employee-leave-ledger', id: 1, attributes: { data: [{ type: 'leave-ledger', attributes: ledger }] } }] };
+    const out = render(body).data[0].attributes.data[0].attributes;
+    expect(out.payable_rate).toBe(REDACTED);
+    expect(out.rate).toBe(REDACTED);
+    expect(out.amount).toBe('105.3570');
+    expect(out.accrual_limit).toBe('3.6500');
+    expect(out.leave_rule).toEqual(ledger.leave_rule);
+  });
+
+  it('foundu_employee_positions_list: position rates, classification rates, and annual salary', () => {
+    const body = {
+      data: [{ type: 'employee-positions', id: 1, attributes: { data: [{ attributes: { position_id: 6, rate: 28.92, start_date: '2026-01-01' } }] } }],
+      included: {
+        'classification-3': { attributes: { title: 'Level 1', rate: '27.15', rate_unloaded: '21.720' } },
+        'employee-permanent-part-time-positions-9': { attributes: { attributes: { annual_salary: 84150, rate: 42.586, hours_per_week: 38 } } },
+      },
+    };
+    const out = render(body);
+    expect(out.data[0].attributes.data[0].attributes).toEqual({ position_id: 6, rate: REDACTED, start_date: '2026-01-01' });
+    expect(out.included['classification-3'].attributes).toEqual({ title: 'Level 1', rate: REDACTED, rate_unloaded: REDACTED });
+    expect(out.included['employee-permanent-part-time-positions-9'].attributes.attributes).toEqual({ annual_salary: REDACTED, rate: REDACTED, hours_per_week: 38 });
+  });
+
+  it('foundu_approved_shifts_list: allowance rates go, the allowance and its quantity stay', () => {
+    const allowance = { allowance_id: '300', allowance_rate_id: '154', title: 'Forklift Allowance', type: 'hourly', rates: { label: 'Forklift Allowance', rate: '0.550000' }, allowance_qty: 5 };
+    const shift = { id: 123, approved_time: { approved_duration: 5.87, approved_breaks: [{ break_is_payable: false }] }, allowances: [allowance], attendance: [{ leave_rule_amount: '0.0000' }] };
+    const out = render({ success: true, data: [shift], meta: { pagination: { total: 878 } } });
+    expect(out.data[0].allowances[0]).toEqual({ allowance_id: '300', allowance_rate_id: '154', title: 'Forklift Allowance', type: 'hourly', rates: REDACTED, allowance_qty: 5 });
+    expect(out.data[0].approved_time).toEqual(shift.approved_time);
+    expect(out.data[0].attendance).toEqual(shift.attendance);
+    expect(out.meta.pagination.total).toBe(878);
+  });
+
+  it('foundu_employee_get with include=current-positions: the position rate goes', () => {
+    const body = { data: { id: 10034 }, included: { 'current-positions-1': { attributes: { positions: [{ position_id: 6, payment_type: 'hourly', rate: '36.1100' }] } } } };
+    expect(render(body).included['current-positions-1'].attributes.positions[0]).toEqual({ position_id: 6, payment_type: 'hourly', rate: REDACTED });
+  });
+
+  it('foundu_employees_search: tax declaration fields go', () => {
+    const body = { data: [{ id: 1, name: 'A. Worker', has_tax_file_number: 1, tax_free_threshold_from_employer: 1, medicare_levy_surcharge: 0, foreign_tax_rate_percent: '25' }] };
+    expect(render(body).data[0]).toEqual({
+      id: 1,
+      name: 'A. Worker',
+      has_tax_file_number: REDACTED,
+      tax_free_threshold_from_employer: REDACTED,
+      medicare_levy_surcharge: REDACTED,
+      foreign_tax_rate_percent: REDACTED,
+    });
+  });
+
+  it('leave applications and history keep their hours', () => {
+    const body = { data: [{ attributes: { amount_requested: 22.6, status: 'approved' } }, { attributes: { amount: '20.0000' } }] };
+    expect(render(body)).toEqual(body);
   });
 });
 
