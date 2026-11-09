@@ -283,7 +283,14 @@ async function readBoundedText(res: Response, maxBytes: number): Promise<string>
   const chunks: Uint8Array[] = [];
   let size = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      const aborted = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+      throw aborted ? cancelled() : new FounduApiError('The foundU API connection failed while reading the response.', res.status);
+    }
+    const { done, value } = chunk;
     if (done) break;
     size += value.byteLength;
     if (size > maxBytes) {

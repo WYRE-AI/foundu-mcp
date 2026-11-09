@@ -123,7 +123,9 @@ export function resolveHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpCon
     }
   }
 
-  return { s2sSecret: secret, host, port, authMode, allowedHosts: parseAllowedHosts(env.MCP_ALLOWED_HOSTS) };
+  // Without S2S auth, default to loopback names so a DNS-rebound page cannot reach /mcp.
+  const allowedHosts = parseAllowedHosts(env.MCP_ALLOWED_HOSTS) ?? (secret ? null : new Set(['127.0.0.1', 'localhost', '::1']));
+  return { s2sSecret: secret, host, port, authMode, allowedHosts };
 }
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -144,8 +146,9 @@ function hostAllowed(req: IncomingMessage, allowed: ReadonlySet<string> | null):
   const host = (req.headers.host ?? '').trim().toLowerCase();
   if (!host) return false;
   if (allowed.has(host)) return true;
-  const withoutPort = host.replace(/^\[([^\]]+)\](:\d+)?$/, '$1').replace(/:\d+$/, '');
-  return allowed.has(withoutPort);
+  const bracketed = host.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return allowed.has(bracketed[1]) || allowed.has(`[${bracketed[1]}]`);
+  return allowed.has(host.replace(/:\d+$/, ''));
 }
 
 class BodyTooLargeError extends Error {}

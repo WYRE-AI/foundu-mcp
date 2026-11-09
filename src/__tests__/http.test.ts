@@ -109,7 +109,11 @@ describe('resolveHttpConfig (startup fails closed)', () => {
   });
 
   it('insecure dev mode always binds loopback and still refuses a placeholder', () => {
-    expect(resolveHttpConfig({ MCP_ALLOW_INSECURE_DEV: '1', MCP_HTTP_HOST: '0.0.0.0', AUTH_MODE: 'gateway' })).toMatchObject({ host: '127.0.0.1', s2sSecret: '' });
+    expect(resolveHttpConfig({ MCP_ALLOW_INSECURE_DEV: '1', MCP_HTTP_HOST: '0.0.0.0', AUTH_MODE: 'gateway' })).toMatchObject({
+      host: '127.0.0.1',
+      s2sSecret: '',
+      allowedHosts: new Set(['127.0.0.1', 'localhost', '::1']),
+    });
     expect(() => resolveHttpConfig({ MCP_ALLOW_INSECURE_DEV: '1', CONDUIT_S2S_SECRET: 'changeme' })).toThrow(StartupError);
   });
 
