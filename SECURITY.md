@@ -10,9 +10,9 @@ We aim to acknowledge reports within two business days and provide a remediation
 
 ## Scope
 
-This server is limited to FoundU roster, hours, and labour-cost aggregates. Do not add tools that return pay rates, bank details, tax file numbers, or bulk employee personal data.
+This server is read-only. Do not add tools that write to foundU, or that return payroll, banking, tax, HR, or medical data (see the README's "What is not exposed").
 
-Partner API tokens are supplied at runtime by Steadfast (environment variables or `x-foundu-*` gateway headers). Do not commit tokens, tenant secrets, or sample payroll extracts.
+Access tokens are supplied at runtime: `FOUNDU_ACCESS_TOKEN` in stdio mode, or `X-FoundU-Access-Token` from the gateway. This server must never hold or use a refresh token; foundU refresh tokens are one-time use. Do not commit tokens, integration keys, `.env` files, or sample payroll extracts.
 
 ## Supported Versions
 

@@ -1,4 +1,4 @@
-# Contributing to FoundU MCP Server
+# Contributing to foundU MCP Server
 
 ## Code of Conduct
 
@@ -6,24 +6,23 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ## Scope
 
-Tools stay limited to roster, hours, and labour-cost aggregates. Pull requests that add pay rates, bank details, tax file numbers, payroll records, or employee personal-data endpoints will not be accepted. `foundu_raw_request` must keep its path allowlist.
+Every tool is a GET against a documented endpoint in the [foundU OpenAPI](https://api.foundu.com.au/api/reference), declared in `src/tools/catalog.ts`. Pull requests that add writes, or that expose payroll, banking, tax, HR, or medical data, will not be accepted. Keep the employee `include` allowlist closed.
 
-Partner API paths are not in the public OpenAPI. When Infinity Ben grants access, update the allowlisted aggregate prefixes only. Steadfast owns credential rotation; do not commit tokens or `.env` files.
+Do not add token refresh to this server. foundU refresh tokens are one-time use; only the gateway may rotate them.
 
 ## Development
 
-Requirements: Node.js 20 or newer, npm 10 or newer.
+Requirements: Node.js 22 or newer.
 
 ```bash
-git clone https://github.com/WYRE-AI/foundu-mcp.git
-cd foundu-mcp
-npm install
-cp .env.example .env
+npm ci --ignore-scripts
 npm test
+npm run lint
 npm run typecheck
+npm run build && npm run smoke
 ```
 
-Tests mock `fetch`. Do not point the test suite at a live FoundU tenant.
+Tests mock `fetch`. Do not point the test suite at a live foundU tenant. Every new tool needs a row in `src/__tests__/endpoints.test.ts` pinning its exact path and query.
 
 ## Commit messages
 
