@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.WYRE-AI/foundu-mcp",
-  "title": "FoundU",
-  "description": "FoundU roster, hours, and labour-cost aggregates. No pay rates, bank details, TFNs, or employee PII.",
+  "title": "foundU",
+  "description": "Read-only foundU workforce data: employees, rosters, shifts, timesheets, leave, and labour reports.",
   "repository": {
     "url": "https://github.com/WYRE-AI/foundu-mcp",
     "source": "github"
@@ -18,24 +18,32 @@
       },
       "environmentVariables": [
         {
-          "name": "FOUNDU_BASE_URL",
-          "description": "Australian FoundU tenant origin (https://<tenant>.foundu.com.au). Infinity Ben must grant partner API access.",
-          "isRequired": true,
-          "format": "string"
-        },
-        {
-          "name": "FOUNDU_API_TOKEN",
-          "description": "FoundU partner API token. Steadfast owns credential rotation.",
+          "name": "FOUNDU_ACCESS_TOKEN",
+          "description": "foundU OAuth2 access token (short-lived). This server never refreshes it; foundU refresh tokens are one-time use.",
           "isRequired": true,
           "isSecret": true,
           "format": "string"
         },
         {
-          "name": "MCP_TRANSPORT",
-          "description": "Transport mode. Fixed to stdio for this package; the image itself defaults to http for gateway hosting.",
+          "name": "FOUNDU_TOOL_TIERS",
+          "description": "Comma-separated tool tiers. Every tool is read-only, so the only valid value is read (the default). The X-Conduit-Tool-Tiers request header can only narrow this set.",
           "isRequired": false,
-          "format": "string",
-          "value": "stdio"
+          "default": "read",
+          "format": "string"
+        },
+        {
+          "name": "MCP_TRANSPORT",
+          "description": "Set to 'stdio' for local CLI use; the image defaults to 'http' for gateway hosting.",
+          "isRequired": false,
+          "default": "stdio",
+          "format": "string"
+        },
+        {
+          "name": "AUTH_MODE",
+          "description": "Credential source: 'env' reads FOUNDU_ACCESS_TOKEN locally; 'gateway' expects the X-FoundU-Access-Token header from the WYRE MCP Gateway and never reads env.",
+          "isRequired": false,
+          "default": "env",
+          "format": "string"
         },
         {
           "name": "LOG_LEVEL",

@@ -1,18 +1,24 @@
 name: mcp-assert
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   assert:
-    uses: wyre-technology/.github/.github/workflows/mcp-assert.yml@7542c27000cf8d213c4910b4f397637b105a718b  # main
+    permissions:
+      contents: read
+      packages: read
+    uses: wyre-technology/.github/.github/workflows/mcp-assert.yml@06856d54d8829929e387523e6c1767d54416e978 # main
     with:
       entry: dist/index.js
-      # Canary must be a credentials-requiring tool: the harness calls it with no
-      # creds and asserts isError=true. foundu_status is deliberately creds-optional
-      # (reports hasCredentials:false and succeeds), so it can't be the canary.
-      # foundu_roster_summary returns isError code not_configured without creds.
-      canary-tool: foundu_roster_summary
+      # The harness calls the canary with no credentials and expects isError.
+      # foundu_states_list needs an access token, so it errors without a call.
+      canary-tool: foundu_states_list
+      extra-suite: evals
