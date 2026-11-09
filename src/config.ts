@@ -1,11 +1,14 @@
 /**
- * Every tool in this server is read-only, so `read` is the only tier. The
- * tier machinery is kept identical to the rest of the fleet so Conduit's
- * X-Conduit-Tool-Tiers contract behaves the same here.
+ * Every tool in this server is read-only. `read` is the default surface.
+ * `admin` holds the two reports whose output includes per-employee pay
+ * figures (labour management, timesheet analysis); it is off unless
+ * FOUNDU_TOOL_TIERS names it. The tier machinery is kept identical to the
+ * rest of the fleet so Conduit's X-Conduit-Tool-Tiers contract behaves the
+ * same here.
  */
-export type ToolTier = 'read';
+export type ToolTier = 'read' | 'admin';
 
-export const ALL_TIERS: readonly ToolTier[] = ['read'];
+export const ALL_TIERS: readonly ToolTier[] = ['read', 'admin'];
 
 export const DEFAULT_TIERS: readonly ToolTier[] = ['read'];
 
@@ -43,6 +46,7 @@ function positiveInt(raw: string | undefined, fallback: number, max: number, min
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 
+/** Deadline for one whole upstream call: waiting for a permit, every attempt, and any backoff. */
 export function requestTimeoutMs(): number {
   return positiveInt(process.env.FOUNDU_REQUEST_TIMEOUT_MS, 30_000, 120_000);
 }
@@ -56,7 +60,7 @@ export function maxUpstreamBytes(): number {
   return positiveInt(process.env.FOUNDU_MAX_UPSTREAM_BYTES, 4 * 1024 * 1024, 128 * 1024 * 1024);
 }
 
-/** foundU publishes no rate limits, so upstream calls are throttled conservatively per process. */
+/** foundU publishes no rate limits, so upstream calls are throttled conservatively per access token (per tenant). */
 export function maxConcurrency(): number {
   return positiveInt(process.env.FOUNDU_MAX_CONCURRENCY, 4, 32);
 }

@@ -12,6 +12,7 @@ regexTarget = "secret"
 regexes = [
   '''^foundu-test-access-token-not-real-1234567890$''',
   '''^foundu-env-token-must-not-be-used-0000$''',
+  '''^foundu-test-access-token-b-not-real-0987654321$''',
   '''^foundu-eval-token-not-real-0000$''',
   '''^test-s2s-7Hq2Lw9Zr4Kx8Mv3Nb6Pc1Td5Fg0Yj$''',
 ]

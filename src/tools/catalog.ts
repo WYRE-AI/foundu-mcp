@@ -1,8 +1,12 @@
 /**
- * The 26 foundU endpoints this server exposes, one tool each, all GET and all
- * read tier. Paths, parameter names, enums, and per-page limits follow the
- * official OpenAPI (https://api.foundu.com.au/api/reference-json, 3.0.1);
+ * The 26 foundU endpoints this server exposes, one tool each, all GET.
+ * Paths, parameter names, enums, and per-page limits follow the official
+ * OpenAPI (https://api.foundu.com.au/api/reference-json, 3.0.1);
  * review changes against it line by line.
+ *
+ * Two reports are `admin` tier, off by default: labour management and
+ * timesheet analysis return pay figures per employee and per shift, from
+ * which an individual's hourly rate follows. Every other tool is `read`.
  *
  * Deliberately NOT exposed: any write (POST/PUT/PATCH/DELETE), and the
  * payroll/identity surface even though it is readable: employee financial
@@ -25,7 +29,7 @@ const DATE_RANGE = /^\d{4}-\d{2}-\d{2},\d{4}-\d{2}-\d{2}$/;
 const ORDER = /^[A-Za-z_]{1,64}:(asc|desc)$/;
 
 function limit(maximum: number, note = ''): Param {
-  return { type: 'integer', minimum: 1, maximum, description: `Records per page (1-${maximum}; larger values are capped).${note ? ` ${note}` : ''}` };
+  return { type: 'integer', minimum: 1, maximum, description: `Maximum records to return (1-${maximum}; larger values are capped).${note ? ` ${note}` : ''}` };
 }
 
 const page: Param = {
@@ -47,7 +51,12 @@ const flag = (description: string, trueValue?: string): Param => ({
   description: `${description} Set true to apply; false is the same as leaving it out.`,
   ...(trueValue ? { trueValue } : {}),
 });
-const order = (fields: string): Param => ({ type: 'string', pattern: ORDER, description: `Sort as field:direction, e.g. id:desc. Fields: ${fields}.` });
+/** `fields` must be wire names only (they are checked against ORDER); say anything else in `note`. */
+const order = (fields: string, note = ''): Param => ({
+  type: 'string',
+  pattern: ORDER,
+  description: `Sort as field:direction, e.g. id:desc. Fields: ${fields}.${note ? ` ${note}` : ''}`,
+});
 const include = (values: readonly string[], note = ''): Param => ({
   type: 'csv',
   items: 'string',
@@ -95,6 +104,13 @@ const shiftWindow = {
   filterRoster: idArray('roster branch IDs'),
 };
 const v3Paging = { limit: limit(1000, 'Default 100; this server caps at 1000.'), page };
+
+/** foundU: filterIds still needs the start and end filters. */
+function filterIdsNeedWindow(args: ToolArgs): void {
+  if (args.filterIds !== undefined && (args.filterStartDate === undefined || args.filterEndDate === undefined)) {
+    throw new ArgumentError('filterIds needs filterStartDate and filterEndDate.');
+  }
+}
 
 // ---- endpoints ------------------------------------------------------------
 
@@ -192,7 +208,7 @@ const ENDPOINTS: Endpoint[] = [
         ['branch', 'employee', 'position', 'position_group', 'errors', 'rosterShiftComment', 'attendance', 'rosterShift', 'clockLog', 'tags', 'qualifications', 'shiftLeave'],
         'Costing and shift documents are not offered.',
       ),
-      order: order('any shift field, e.g. id'),
+      order: order('id', 'Other shift fields are accepted by foundU but their wire names are not documented.'),
       limit: limit(1000),
     },
   },
@@ -219,7 +235,10 @@ const ENDPOINTS: Endpoint[] = [
       filter_on_site_personnel_only: flag('Only shifts that are active now (people on site).'),
       filter_updated_since: updatedSince,
       include: include(['branch', 'client', 'employee', 'roster_shift_breaks', 'candidate']),
-      order: order('shift id, shift start, shift end, break start, break end, employee id, operation id, branch id, date, duration'),
+      order: order(
+        'id, date',
+        'Only these wire names are confirmed. foundU also documents sorting by shift start/end, break start/end, employee, operation, branch, and duration without giving their wire names.',
+      ),
       limit: limit(1000),
     },
   },
@@ -264,6 +283,7 @@ const ENDPOINTS: Endpoint[] = [
       include: { type: 'string', enum: ['tags', 'tag-groups'], description: 'Related data to embed.' },
       ...v3Paging,
     },
+    validate: filterIdsNeedWindow,
   },
   {
     name: 'foundu_unassigned_shifts_list',
@@ -396,7 +416,8 @@ const ENDPOINTS: Endpoint[] = [
       duration: {
         type: 'string',
         required: true,
-        enum: ['custom_date_range', 'this_month', 'last_month', 'last_week', 'last_30_days', 'last_90_days', 'last_120_days', 'this_financial_year', 'last_financial_year', 'specific_date_range', 'all'],
+        // specific_date_range is left out: foundU documents no parameter carrying its date.
+        enum: ['custom_date_range', 'this_month', 'last_month', 'last_week', 'last_30_days', 'last_90_days', 'last_120_days', 'this_financial_year', 'last_financial_year', 'all'],
         description: 'Reporting period. custom_date_range needs from_date and to_date.',
       },
       from_date: date('Start date (for custom_date_range)'),
@@ -425,15 +446,19 @@ const ENDPOINTS: Endpoint[] = [
       filter_qualification_types: text('Qualification types.'),
       filter_expire_status: text('Expiry status.'),
       filter_office_codes: ids('office code IDs'),
-      order: order('expiry_date, capture_date, qualification name, upload date, expiring in (days)'),
+      order: order(
+        'expiry_date',
+        'Only this wire name is confirmed. foundU also documents sorting by capture date, qualification name, upload date, and days to expiry without giving their wire names.',
+      ),
       limit: limit(500),
       page,
     },
   },
   {
     name: 'foundu_labour_management_report',
+    tier: 'admin',
     description:
-      'Labour management report: hours and labour-cost totals grouped by period, employee, operation, position, or cost code. The last row is the total. Individual pay rates are removed. Provide exactly one of duration_custom_range or duration_specific_date. Paged.',
+      'Labour management report: hours and labour-cost totals grouped by period, employee, shift, operation, position, or cost code. The last row is the total. Admin tier: grouped or filtered by employee or shift, its Total Pay and Total Hours are per-employee pay figures (pay divided by hours is the hourly rate). Provide exactly one of duration_custom_range or duration_specific_date. Paged.',
     path: '/api/v2/financial-report-centre/labour-management',
     query: {
       duration_custom_range: dateRange('Report window'),
@@ -460,8 +485,9 @@ const ENDPOINTS: Endpoint[] = [
   },
   {
     name: 'foundu_timesheet_analysis_report',
+    tier: 'admin',
     description:
-      'Analyse real timesheets by employee, operation, or roster: hours and totals per day (award interpretation, time-based). Paged with current_page/last_page/per_page.',
+      'Analyse real timesheets by employee, operation, or roster: award-interpreted line items per employee per day (award interpretation, time-based). Admin tier: each line carries hours (qty), the amount paid, and the amount charged, so it exposes per-employee pay; the per-unit pay_rate field is removed but amount divided by qty gives it. Paged with current_page/last_page/per_page.',
     path: '/api/v2/award-interpretation/analyse/time-based',
     query: {
       filter_date_from: date('Start date'),

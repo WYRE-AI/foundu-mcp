@@ -26,7 +26,7 @@
         },
         {
           "name": "FOUNDU_TOOL_TIERS",
-          "description": "Comma-separated tool tiers. Every tool is read-only, so the only valid value is read (the default). The X-Conduit-Tool-Tiers request header can only narrow this set.",
+          "description": "Comma-separated tool tiers: read (the default), or read,admin to also list the two reports that return per-employee pay figures. The X-Conduit-Tool-Tiers request header can only narrow this set.",
           "isRequired": false,
           "default": "read",
           "format": "string"

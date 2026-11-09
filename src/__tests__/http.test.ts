@@ -6,7 +6,7 @@ import { resolveCredentials } from '../client.js';
 import { isGatewayMode, resetGatewayLock } from '../config.js';
 import { resolveHttpConfig, s2sSecretProblem, startHttpServer, StartupError, type HttpConfig } from '../http.js';
 import { resetToolsets } from '../tools/index.js';
-import { FAKE_ENV_TOKEN, FAKE_S2S_SECRET, FAKE_TOKEN, jsonResponse, TOOL_COUNT } from './helpers.js';
+import { FAKE_ENV_TOKEN, FAKE_S2S_SECRET, FAKE_TOKEN, jsonResponse, READ_TOOL_COUNT, TOOL_COUNT } from './helpers.js';
 
 const ENV_KEYS = [
   'AUTH_MODE',
@@ -205,7 +205,7 @@ describe('HTTP transport', () => {
     const headers = { ...gatewayHeaders, 'x-gateway-s2s': mint(FAKE_S2S_SECRET) };
 
     const list = (await (await post(port, listTools, headers)).json()) as RpcResult;
-    expect(list.result.tools).toHaveLength(TOOL_COUNT);
+    expect(list.result.tools).toHaveLength(READ_TOOL_COUNT);
 
     const call = (await (await post(port, callStates, headers)).json()) as RpcResult;
     expect(call.result.isError).toBeFalsy();
@@ -268,11 +268,25 @@ describe('HTTP transport', () => {
       return ((await res.json()) as RpcResult).result.tools!.map((t) => t.name);
     }
 
-    it(`absent header or "read" exposes all ${TOOL_COUNT} read tools`, async () => {
+    it(`absent header or "read" exposes all ${READ_TOOL_COUNT} read tools`, async () => {
       const port = await listen();
-      expect(await listWith(port, {})).toHaveLength(TOOL_COUNT);
-      expect(await listWith(port, { 'x-conduit-tool-tiers': 'read' })).toHaveLength(TOOL_COUNT);
-      expect(await listWith(port, { 'x-conduit-tool-tiers': 'READ, write, admin' })).toHaveLength(TOOL_COUNT);
+      expect(await listWith(port, {})).toHaveLength(READ_TOOL_COUNT);
+      expect(await listWith(port, { 'x-conduit-tool-tiers': 'read' })).toHaveLength(READ_TOOL_COUNT);
+      expect(await listWith(port, { 'x-conduit-tool-tiers': 'READ, write, admin' })).toHaveLength(READ_TOOL_COUNT);
+    });
+
+    it('with FOUNDU_TOOL_TIERS=read,admin the header decides whether the pay-figure reports are listed', async () => {
+      process.env.FOUNDU_TOOL_TIERS = 'read,admin';
+      resetToolsets();
+      try {
+        const port = await listen();
+        expect(await listWith(port, {})).toHaveLength(TOOL_COUNT);
+        expect(await listWith(port, { 'x-conduit-tool-tiers': 'read,admin' })).toHaveLength(TOOL_COUNT);
+        expect(await listWith(port, { 'x-conduit-tool-tiers': 'read' })).toHaveLength(READ_TOOL_COUNT);
+      } finally {
+        delete process.env.FOUNDU_TOOL_TIERS;
+        resetToolsets();
+      }
     });
 
     it('an empty or non-read header exposes zero tools and blocks calls', async () => {

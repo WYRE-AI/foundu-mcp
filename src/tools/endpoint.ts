@@ -14,9 +14,15 @@
  * - `wire` renames a param on the wire. Two params may share a wire name;
  *   their values are sent in declaration order.
  * Pagination is passed through as-is: no tool ever fetches a second page.
+ * Most foundU list endpoints document `limit` but no `page`, so they can
+ * never return more than one batch. Those tools say so in their description,
+ * and a result that may have been cut off (as many rows as the limit sent, or
+ * no limit sent, so foundU's undocumented default applied) is marked
+ * `possibly_truncated`.
  */
 import type { Tool, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import { founduGet } from '../client.js';
+import type { ToolTier } from '../config.js';
 import { ArgumentError } from '../types.js';
 import { idSegment } from '../validate.js';
 import type { ToolArgs, ToolDef } from './types.js';
@@ -43,6 +49,22 @@ export interface Endpoint {
   query?: Record<string, Param>;
   /** Cross-parameter rules (e.g. "exactly one of"); throws ArgumentError. Runs before any request. */
   validate?: (args: ToolArgs) => void;
+  /** Defaults to `read`. */
+  tier?: ToolTier;
+}
+
+const NO_PAGING_NOTE =
+  ' Not paged: a list result is capped at `limit` and there is no next page, so narrow with filters or a shorter date window to see the rest.';
+const POSSIBLY_TRUNCATED_NOTE =
+  'This endpoint has no next page and returned as many records as the limit allows (or foundU applied its undocumented default limit), so more may exist. Narrow the filters or date window, or raise limit if it is below the maximum.';
+
+/** Marks an unpaged `{ data: [...] }` result that may have been cut off at the limit. */
+function flagIfPossiblyTruncated(result: unknown, sentLimit: number | undefined): unknown {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result;
+  const data = (result as { data?: unknown }).data;
+  if (!Array.isArray(data)) return result;
+  if (sentLimit !== undefined && data.length < sentLimit) return result;
+  return { ...result, possibly_truncated: true, truncation_note: POSSIBLY_TRUNCATED_NOTE };
 }
 
 const MAX_STRING = 1000;
@@ -140,6 +162,8 @@ export function endpointTool(spec: Endpoint): ToolDef {
     throw new Error(`${spec.name}: pathParams must match the placeholders in ${spec.path}.`);
   }
   const query = spec.query ?? {};
+  const paged = 'page' in query;
+  const unpagedLimit = 'limit' in query && !paged;
 
   const properties: Record<string, object> = {};
   for (const [key, description] of Object.entries(pathParams)) properties[key] = { type: 'integer', minimum: 0, description };
@@ -148,15 +172,16 @@ export function endpointTool(spec: Endpoint): ToolDef {
 
   const tool: Tool = {
     name: spec.name,
-    description: spec.description,
+    description: unpagedLimit ? `${spec.description}${NO_PAGING_NOTE}` : spec.description,
     inputSchema: { type: 'object', properties, ...(required.length ? { required } : {}), additionalProperties: false },
     annotations: READ_ONLY,
   };
 
   return {
-    tier: 'read',
+    tier: spec.tier ?? 'read',
     tool,
-    handler: (args: ToolArgs, creds) => {
+    paged,
+    handler: async (args: ToolArgs, creds) => {
       const path = spec.path.replace(/\{(\w+)\}/g, (_match, key: string) => idSegment(args[key], key));
       const pairs: Array<[string, string]> = [];
       for (const [key, p] of Object.entries(query)) {
@@ -168,7 +193,10 @@ export function endpointTool(spec: Endpoint): ToolDef {
         for (const v of wireValues(key, p, value)) pairs.push([wireName(key, p), v]);
       }
       spec.validate?.(args);
-      return founduGet(creds, { path, query: pairs });
+      const result = await founduGet(creds, { path, query: pairs });
+      if (!unpagedLimit) return result;
+      const sentLimit = pairs.find(([name]) => name === 'limit')?.[1];
+      return flagIfPossiblyTruncated(result, sentLimit === undefined ? undefined : Number(sentLimit));
     },
   };
 }

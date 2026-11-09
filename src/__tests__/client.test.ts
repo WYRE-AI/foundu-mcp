@@ -2,19 +2,21 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { buildUrl, resolveCredentials, runWithCredentials } from '../client.js';
-import { lockGatewayMode, resetGatewayLock } from '../config.js';
+import { ALL_TIERS, lockGatewayMode, resetGatewayLock } from '../config.js';
 import { createServer } from '../server.js';
-import { getDefaultToolset } from '../tools/index.js';
+import { buildToolset, getDefaultToolset } from '../tools/index.js';
 import { logger } from '../utils/logger.js';
 import { VERSION } from '../version.js';
 import {
   always,
   FAKE_ENV_TOKEN,
   FAKE_TOKEN,
+  FAKE_TOKEN_B,
   jsonResponse,
   mockFoundu,
   sequence,
   textOf,
+  READ_TOOL_COUNT,
   TOOL_COUNT,
   vendorError,
 } from './helpers.js';
@@ -34,7 +36,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   logSpy.mockRestore();
   resetGatewayLock();
-  for (const k of ['FOUNDU_ACCESS_TOKEN', 'AUTH_MODE', 'FOUNDU_MAX_CONCURRENCY']) delete process.env[k];
+  for (const k of ['FOUNDU_ACCESS_TOKEN', 'AUTH_MODE', 'FOUNDU_MAX_CONCURRENCY', 'FOUNDU_REQUEST_TIMEOUT_MS']) delete process.env[k];
+  process.env.FOUNDU_RETRY_BASE_MS = '1';
   process.env.LOG_LEVEL = 'error';
 });
 
@@ -64,7 +67,7 @@ describe('upstream request contract', () => {
 
   it('every tool calls only https://api.foundu.com.au with GET and the bearer token', async () => {
     const { calls } = mockFoundu([always(() => jsonResponse({ data: [] }))]);
-    const ts = getDefaultToolset();
+    const ts = buildToolset(new Set(ALL_TIERS));
     for (const tool of ts.tools) {
       const res = await ts.dispatch(tool.name, minimalArgs(tool.name, tool.inputSchema.required ?? []));
       expect(res.isError, `${tool.name}: ${textOf(res)}`).toBeFalsy();
@@ -252,6 +255,96 @@ describe('throttling and backoff', () => {
   });
 });
 
+describe('throttling is per tenant and bounded in time', () => {
+  /** A promise plus its resolver, used to hold upstream responses until the test releases them. */
+  function gate() {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    return { opened, open };
+  }
+  const asTenant = (token: string, name = PROBE, signal?: AbortSignal) =>
+    runWithCredentials({ accessToken: token }, () => getDefaultToolset().dispatch(name, {}, signal));
+  const within = <T>(p: Promise<T>, ms: number) =>
+    Promise.race([p, new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), ms))]);
+
+  it("one tenant's saturated permits never delay another tenant", async () => {
+    process.env.FOUNDU_MAX_CONCURRENCY = '2';
+    const slowA = gate();
+    const { calls } = mockFoundu([
+      async (call) => {
+        if (call.headers.authorization === `Bearer ${FAKE_TOKEN}`) await slowA.opened;
+        return jsonResponse({ '*': [] });
+      },
+    ]);
+    const tenantA = Array.from({ length: 6 }, () => asTenant(FAKE_TOKEN));
+    const tenantB = await within(asTenant(FAKE_TOKEN_B), 1000);
+    expect(tenantB).not.toBe('timeout');
+    expect((tenantB as { isError?: boolean }).isError).toBeFalsy();
+    slowA.open();
+    expect((await Promise.all(tenantA)).every((r) => !r.isError)).toBe(true);
+    expect(calls).toHaveLength(7);
+  });
+
+  it('time waiting for a permit counts against FOUNDU_REQUEST_TIMEOUT_MS', async () => {
+    process.env.FOUNDU_MAX_CONCURRENCY = '1';
+    process.env.FOUNDU_REQUEST_TIMEOUT_MS = '50';
+    const held = gate();
+    const { calls } = mockFoundu([
+      async () => {
+        await held.opened;
+        return jsonResponse({ '*': [] });
+      },
+    ]);
+    const first = asTenant(FAKE_TOKEN);
+    const queued = await within(asTenant(FAKE_TOKEN), 1000);
+    expect(queued).not.toBe('timeout');
+    expect((queued as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(queued as Awaited<typeof first>)).toMatch(/timed out or was cancelled/);
+    expect(calls).toHaveLength(1);
+    held.open();
+    await first;
+  });
+
+  it('a cancelled caller leaves the queue at once and never reaches foundU', async () => {
+    process.env.FOUNDU_MAX_CONCURRENCY = '1';
+    const held = gate();
+    const { calls } = mockFoundu([
+      async () => {
+        await held.opened;
+        return jsonResponse({ '*': [] });
+      },
+    ]);
+    const first = asTenant(FAKE_TOKEN);
+    const controller = new AbortController();
+    const queued = asTenant(FAKE_TOKEN, PROBE, controller.signal);
+    controller.abort();
+    const result = await within(queued, 200);
+    expect(result).not.toBe('timeout');
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(calls).toHaveLength(1);
+    held.open();
+    expect((await first).isError).toBeFalsy();
+  });
+
+  it('a call backing off after 429 does not hold its permit while it sleeps', async () => {
+    process.env.FOUNDU_MAX_CONCURRENCY = '1';
+    process.env.FOUNDU_RETRY_BASE_MS = '300';
+    const finished: string[] = [];
+    mockFoundu([
+      sequence(
+        () => jsonResponse({ message: 'Too Many Attempts.' }, 429),
+        () => jsonResponse({ '*': [] }),
+      ),
+    ]);
+    const backingOff = asTenant(FAKE_TOKEN, PROBE).then((r) => (finished.push('backing-off'), r));
+    await new Promise((r) => setTimeout(r, 20));
+    const other = asTenant(FAKE_TOKEN, 'foundu_positions_list').then((r) => (finished.push('other'), r));
+    const results = await Promise.all([backingOff, other]);
+    expect(results.every((r) => !r.isError)).toBe(true);
+    expect(finished).toEqual(['other', 'backing-off']);
+  });
+});
+
 describe('the access token never leaks', () => {
   it('is redacted when the vendor echoes it in an error message, and absent from logs', async () => {
     mockFoundu([always(() => vendorError(401, `Unauthenticated token ${FAKE_TOKEN}`))]);
@@ -338,7 +431,7 @@ describe('credential source', () => {
 });
 
 describe('end to end over MCP (mocked upstream)', () => {
-  it(`tools/list returns ${TOOL_COUNT} read-only tools and tools/call round-trips a read`, async () => {
+  it(`tools/list returns ${READ_TOOL_COUNT} read-only tools and tools/call round-trips a read`, async () => {
     const { calls } = mockFoundu([
       (call) =>
         call.url.pathname === '/api/v2/roster-branches'
@@ -352,7 +445,7 @@ describe('end to end over MCP (mocked upstream)', () => {
     await client.connect(clientSide);
     try {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(TOOL_COUNT);
+      expect(tools).toHaveLength(READ_TOOL_COUNT);
       expect(tools.every((t) => t.annotations?.readOnlyHint === true && t.annotations?.destructiveHint === false)).toBe(true);
 
       const result = (await client.callTool({ name: 'foundu_rosters_list', arguments: { filter_status: 'Approved', limit: 1 } })) as {
@@ -360,7 +453,11 @@ describe('end to end over MCP (mocked upstream)', () => {
         content: Array<{ type: string; text: string }>;
       };
       expect(result.isError).toBeFalsy();
-      expect(JSON.parse(result.content[0].text)).toEqual({ data: [{ id: 278, title: 'Night shift', status: 'Approved', client_id: 120 }], included: {} });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({
+        data: [{ id: 278, title: 'Night shift', status: 'Approved', client_id: 120 }],
+        included: {},
+        possibly_truncated: true,
+      });
       expect(calls).toHaveLength(1);
       expect(calls[0].url.search).toBe('?filter_status=Approved&limit=1');
     } finally {

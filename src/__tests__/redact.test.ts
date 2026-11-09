@@ -47,6 +47,16 @@ describe('field-level redaction (defence in depth)', () => {
     'client_secret',
     'password',
     'clock_pass_code',
+    'rate',
+    'award_rate',
+    'rate_loading',
+    'cost_rate',
+    'passport_number',
+    'driver_licence_number',
+    'license_number',
+    'emergency_contact_phone',
+    'abn',
+    'tax_scale',
   ])('treats %j as sensitive', (key) => {
     expect(isSensitiveKey(key)).toBe(true);
   });
@@ -69,6 +79,10 @@ describe('field-level redaction (defence in depth)', () => {
     'position_title',
     'operation_id',
     'shift_status',
+    'pay_rate_type',
+    'rate_type',
+    'licence_type',
+    'qualification_name',
   ])('keeps %j (directory and aggregate data)', (key) => {
     expect(isSensitiveKey(key)).toBe(false);
   });
@@ -92,6 +106,37 @@ describe('field-level redaction (defence in depth)', () => {
   });
 });
 
+describe('timesheet-analysis line item (shape from the official spec)', () => {
+  // GET /api/v2/award-interpretation/analyse/time-based: data[].data[weekEnding].data[day].data[] line items.
+  const line = {
+    type: 'line_item',
+    type_secondary: 'Morning shift S-1',
+    pay_rate_type: 'ordinary',
+    label: 'Ordinary hours',
+    qty: 7.6,
+    pay_rate: 26.5,
+    charge_rate: 13.5,
+    amount: 565.5,
+    charge_amount: 600,
+    award: 'Store Clerk Award 2025',
+    position_id: 413,
+  };
+  const body = { current_page: 1, data: [{ data: { '2026-11-08': { data: { '2026-11-04': { data: [line] } } } } }], last_page: 1 };
+
+  it('removes the per-unit pay rate and keeps the Ordinary/Overtime label', () => {
+    const out = JSON.parse(renderSafe(body, 100_000));
+    const item = out.data[0].data['2026-11-08'].data['2026-11-04'].data[0];
+    expect(item.pay_rate).toBe(REDACTED);
+    expect(item.pay_rate_type).toBe('ordinary');
+  });
+
+  it('keeps qty and amount: the report is admin tier because it exposes per-employee pay', () => {
+    const item = JSON.parse(renderSafe(body, 100_000)).data[0].data['2026-11-08'].data['2026-11-04'].data[0];
+    expect(item.qty).toBe(7.6);
+    expect(item.amount).toBe(565.5);
+  });
+});
+
 describe('rendering', () => {
   it('serializes tool output compactly', () => {
     expect(renderSafe({ data: [{ id: 'a' }], meta: { pagination: { total: 1 } } }, 10_000)).toBe('{"data":[{"id":"a"}],"meta":{"pagination":{"total":1}}}');
@@ -99,12 +144,20 @@ describe('rendering', () => {
 
   it('shrinks an oversized page structurally and keeps the pagination block', () => {
     const page = { data: Array.from({ length: 200 }, (_, i) => ({ id: i, title: 'x'.repeat(50) })), meta: { pagination: { current_page: 1, last_page: 4 } } };
-    const out = JSON.parse(renderSafe(page, 2000));
+    const out = JSON.parse(renderSafe(page, 2000, [], { paged: true }));
     expect(out.truncated).toBe(true);
     expect(out.meta).toEqual(page.meta);
     expect(out.data.length).toBeGreaterThan(0);
     expect(out.data.length).toBeLessThan(200);
     expect(out.truncation_hint).toMatch(/smaller limit/);
+  });
+
+  it('for an endpoint without paging, the shrink hint never points at a next page', () => {
+    const page = { data: Array.from({ length: 200 }, (_, i) => ({ id: i, title: 'x'.repeat(50) })) };
+    const out = JSON.parse(renderSafe(page, 2000));
+    expect(out.truncated).toBe(true);
+    expect(out.truncation_hint).not.toMatch(/next page/i);
+    expect(out.truncation_hint).toMatch(/narrow the filters or date window/);
   });
 
   it('caps upstream bodies at 4 MiB by default', () => {

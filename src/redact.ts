@@ -5,12 +5,15 @@
  *
  * Two kinds of field are removed by key name, whatever their value:
  * - credentials (access/refresh tokens, client secrets, passwords);
- * - payroll and identity data this server never needs: tax file numbers,
- *   bank details, superannuation, pay rates, salary/wages, date of birth,
- *   visa and medical data. The endpoints and includes that carry these are
+ * - payroll and identity data this server never needs: tax file numbers
+ *   and tax scales, bank details, superannuation, pay rates, salary/wages,
+ *   date of birth, visa, passport, licence numbers, ABNs, emergency
+ *   contacts, and medical data. The endpoints and includes that carry these are
  *   already excluded (see tools/catalog.ts); this is defence in depth.
- * Aggregate figures such as "Total Pay" or "Total Hours" in the labour report
- * are kept: they are the point of that report and are not rates.
+ * Figures such as "Total Pay", "Total Hours", `amount`, and `qty` are kept:
+ * they are the point of the admin-tier reports. Grouped or filtered by
+ * employee, they are per-employee pay, which is why those reports are admin
+ * tier and off by default.
  * The token itself is also caught by exact match (the token in use) and by
  * shape (Bearer headers and JWTs).
  */
@@ -54,6 +57,9 @@ const SENSITIVE_TOKENS = new Set([
   'visa',
   'medical',
   'medicare',
+  'passport',
+  'emergency',
+  'abn',
 ]);
 
 /** Splits camelCase, snake_case, kebab-case, and "Title Case" keys into lower-case tokens. */
@@ -65,15 +71,17 @@ export function tokensOf(key: string): string[] {
     .filter(Boolean);
 }
 
-const RATE_QUALIFIERS = ['pay', 'hour', 'hourly', 'base', 'penalty', 'overtime', 'ordinary', 'loaded', 'average'];
+const RATE_QUALIFIERS = ['pay', 'hour', 'hourly', 'base', 'penalty', 'overtime', 'ordinary', 'loaded', 'average', 'award', 'loading', 'cost'];
 
 export function isSensitiveKey(key: string): boolean {
   if (CREDENTIAL_KEYS.has(key.toLowerCase().replace(/[\s_-]/g, ''))) return true;
   const tokens = tokensOf(key);
   const has = (t: string) => tokens.includes(t);
   if (tokens.some((t) => SENSITIVE_TOKENS.has(t))) return true;
-  if (has('rate') && RATE_QUALIFIERS.some(has)) return true;
-  if (has('tax') && (has('file') || has('number'))) return true;
+  // A bare `rate`, or a qualified one; `*_rate_type` (e.g. pay_rate_type: ordinary/overtime) is a label, not a rate.
+  if (has('rate') && tokens.at(-1) !== 'type' && (tokens.length === 1 || RATE_QUALIFIERS.some(has))) return true;
+  if (has('tax') && (has('file') || has('number') || has('scale'))) return true;
+  if ((has('licence') || has('license')) && has('number')) return true;
   if (has('bank') || has('banking')) return true;
   if (has('account') && (has('number') || has('name') || has('bsb'))) return true;
   if (has('date') && has('birth')) return true;
@@ -130,8 +138,14 @@ function isPage(value: unknown): value is Page {
  * model can still page. Returns undefined when even an empty `data` does not
  * fit.
  */
-function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string): string | undefined {
+function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string, paged: boolean): string | undefined {
   const total = page.data.length;
+  const hint = (n: number) =>
+    paged
+      ? `Only the first ${n} of ${total} items in this page fit in the response. Moving to the next page skips the rest: ` +
+        `to see them, repeat this request with a smaller limit (at most ${Math.max(n, 1)}).`
+      : `Only the first ${n} of ${total} items fit in the response, and this endpoint has no paging: ` +
+        'to see the rest, narrow the filters or date window.';
   const build = (n: number) =>
     render({
       ...page,
@@ -139,9 +153,7 @@ function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string
       truncated: true,
       returned_items: n,
       total_items_in_page: total,
-      truncation_hint:
-        `Only the first ${n} of ${total} items in this page fit in the response. Moving to the next page skips the rest: ` +
-        `to see them, repeat this request with a smaller limit (at most ${Math.max(n, 1)}).`,
+      truncation_hint: hint(n),
     });
   if (build(0).length > maxChars) return undefined;
   // Output length only grows with n, so binary-search the largest n that fits.
@@ -159,12 +171,19 @@ function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string
  * Serializes, redacts, then fits the cap. The single exit path for tool
  * output. Length is measured on the redacted text. An oversized list page is
  * shrunk structurally (pagination fields kept); anything else is cut as text.
+ * `paged` says whether the tool can fetch a next page, which decides how the
+ * shrink hint tells the model to reach the dropped items.
  */
-export function renderSafe(value: unknown, maxChars: number, knownSecrets: readonly (string | undefined)[] = []): string {
+export function renderSafe(
+  value: unknown,
+  maxChars: number,
+  knownSecrets: readonly (string | undefined)[] = [],
+  { paged = false }: { paged?: boolean } = {},
+): string {
   if (typeof value === 'string') return truncate(redactText(value, knownSecrets), maxChars);
   const render = (v: unknown) => redactText(JSON.stringify(v) ?? 'null', knownSecrets);
   const redacted = redactValue(value);
   const text = render(redacted);
   if (text.length <= maxChars) return text;
-  return (isPage(redacted) && shrinkPage(redacted, maxChars, render)) || truncate(text, maxChars);
+  return (isPage(redacted) && shrinkPage(redacted, maxChars, render, paged)) || truncate(text, maxChars);
 }

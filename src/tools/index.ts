@@ -57,7 +57,7 @@ export function buildToolset(tiers: ReadonlySet<ToolTier>): Toolset {
       accessToken = creds.accessToken;
       const value = await runWithAbortSignal(signal, () => def.handler(pickDeclaredArgs(def.tool, rawArgs), creds));
       logger.info('Tool call succeeded', { tool: name, ms: Date.now() - started });
-      return { content: [{ type: 'text', text: renderSafe(value, maxResponseChars(), [accessToken]) }] };
+      return { content: [{ type: 'text', text: renderSafe(value, maxResponseChars(), [accessToken], { paged: def.paged }) }] };
     } catch (err) {
       logger.warn('Tool call failed', {
         tool: name,

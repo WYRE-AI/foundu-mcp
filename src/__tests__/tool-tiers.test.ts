@@ -1,15 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TIERS, narrowTiers, parseToolTiers } from '../config.js';
 import { ALL_TOOL_DEFS, buildToolset, pickDeclaredArgs } from '../tools/index.js';
-import { textOf, TOOL_COUNT } from './helpers.js';
+import { ADMIN_TOOLS, READ_TOOL_COUNT, textOf, TOOL_COUNT } from './helpers.js';
 
 describe('tool tiers', () => {
-  it(`exposes exactly ${TOOL_COUNT} tools, all read tier, all read-only annotated`, () => {
+  it(`exposes exactly ${TOOL_COUNT} tools, all read-only annotated; only the pay-figure reports are admin tier`, () => {
     expect(ALL_TOOL_DEFS).toHaveLength(TOOL_COUNT);
     for (const d of ALL_TOOL_DEFS) {
-      expect(d.tier, d.tool.name).toBe('read');
+      expect(d.tier, d.tool.name).toBe(ADMIN_TOOLS.includes(d.tool.name) ? 'admin' : 'read');
       expect(d.tool.annotations, d.tool.name).toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true });
     }
+  });
+
+  it('the pay-figure reports say so and are off by default', () => {
+    const defaults = buildToolset(parseToolTiers(undefined)).tools.map((t) => t.name);
+    for (const name of ADMIN_TOOLS) {
+      expect(defaults).not.toContain(name);
+      const tool = ALL_TOOL_DEFS.find((d) => d.tool.name === name)!.tool;
+      expect(tool.description).toMatch(/per-employee pay/);
+      expect(tool.description).not.toMatch(/pay rates are removed/i);
+    }
+    const withAdmin = buildToolset(parseToolTiers('read,admin'));
+    expect(withAdmin.tools).toHaveLength(TOOL_COUNT);
+    expect(buildToolset(narrowTiers(withAdmin.tiers, 'read')).tools).toHaveLength(READ_TOOL_COUNT);
+    expect(buildToolset(narrowTiers(withAdmin.tiers, 'admin')).tools.map((t) => t.name).sort()).toEqual([...ADMIN_TOOLS].sort());
   });
 
   it('names are unique, foundu_<entity>_<read verb>', () => {
@@ -32,7 +46,7 @@ describe('tool tiers', () => {
     expect([...DEFAULT_TIERS]).toEqual(['read']);
     expect([...parseToolTiers(undefined)]).toEqual(['read']);
     expect([...parseToolTiers('  ')]).toEqual(['read']);
-    expect(buildToolset(parseToolTiers(undefined)).tools).toHaveLength(TOOL_COUNT);
+    expect(buildToolset(parseToolTiers(undefined)).tools).toHaveLength(READ_TOOL_COUNT);
   });
 
   it('rejects unknown tier names loudly', () => {
@@ -43,6 +57,7 @@ describe('tool tiers', () => {
     const configured = parseToolTiers('read');
     expect([...narrowTiers(configured, undefined)]).toEqual(['read']);
     expect([...narrowTiers(configured, 'read,admin')]).toEqual(['read']);
+    expect([...narrowTiers(parseToolTiers('read,admin'), 'read,write')]).toEqual(['read']);
     expect([...narrowTiers(configured, '')]).toEqual([]);
     expect([...narrowTiers(configured, 'write')]).toEqual([]);
     const empty = buildToolset(narrowTiers(configured, ''));

@@ -7,8 +7,11 @@
  *   (foundU answers unauthenticated calls with 302 to /login);
  * - the URL is built from an already-encoded path and checked to stay on
  *   https://api.foundu.com.au at exactly that path;
- * - upstream calls are throttled (FOUNDU_MAX_CONCURRENCY) and 429/503 are
- *   retried with bounded backoff, because foundU publishes no rate limits;
+ * - upstream calls are throttled per access token (FOUNDU_MAX_CONCURRENCY),
+ *   so one tenant can never queue behind another, and 429/503 are retried
+ *   with bounded backoff, because foundU publishes no rate limits;
+ * - one deadline (FOUNDU_REQUEST_TIMEOUT_MS, plus the caller's cancellation)
+ *   covers the whole call: waiting for a permit, every attempt, and backoff;
  * - response bodies are bounded while streaming;
  * - vendor errors keep HTTP status, message, and any request ID.
  * This server never refreshes tokens: foundU refresh tokens are one-time use,
@@ -62,6 +65,7 @@ export function runWithAbortSignal<T>(signal: AbortSignal | undefined, fn: () =>
   return signal ? callerSignal.run(signal, fn) : fn();
 }
 
+/** The deadline for one whole call: the request timeout, plus the MCP caller's cancellation. */
 function requestSignal(): AbortSignal {
   const timeout = AbortSignal.timeout(requestTimeoutMs());
   const caller = callerSignal.getStore();
@@ -88,19 +92,60 @@ export function buildUrl(path: string, query: QueryPairs = []): URL {
   return url;
 }
 
+const cancelled = () => new FounduApiError('The foundU API request timed out or was cancelled.');
+
 // ---- throttling -------------------------------------------------------------
 
-let inFlight = 0;
-const waiting: Array<() => void> = [];
+/**
+ * One lane per access token, i.e. per tenant integration, so a slow or
+ * rate-limited tenant only ever queues behind itself. A lane exists only
+ * while it has calls in flight or waiting.
+ */
+interface Lane {
+  active: number;
+  waiting: Array<() => void>;
+}
+const lanes = new Map<string, Lane>();
 
-async function withPermit<T>(fn: () => Promise<T>): Promise<T> {
-  while (inFlight >= maxConcurrency()) await new Promise<void>((resolve) => waiting.push(resolve));
-  inFlight++;
+function acquire(key: string, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(cancelled());
+  let lane = lanes.get(key);
+  if (!lane) lanes.set(key, (lane = { active: 0, waiting: [] }));
+  if (lane.active < maxConcurrency()) {
+    lane.active++;
+    return Promise.resolve();
+  }
+  const queue = lane.waiting;
+  return new Promise<void>((resolve, reject) => {
+    const grant = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const onAbort = () => {
+      const i = queue.indexOf(grant);
+      if (i >= 0) queue.splice(i, 1);
+      reject(cancelled());
+    };
+    queue.push(grant);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Hands the permit straight to the next waiter, or frees it. */
+function release(key: string): void {
+  const lane = lanes.get(key);
+  if (!lane) return;
+  const next = lane.waiting.shift();
+  if (next) return next();
+  if (--lane.active === 0) lanes.delete(key);
+}
+
+async function withPermit<T>(key: string, signal: AbortSignal, fn: () => Promise<T>): Promise<T> {
+  await acquire(key, signal);
   try {
     return await fn();
   } finally {
-    inFlight--;
-    waiting.shift()?.();
+    release(key);
   }
 }
 
@@ -125,30 +170,29 @@ export async function founduGet(creds: FounduCredentials, req: FounduRequest): P
     'user-agent': `foundu-mcp/${VERSION}`,
   };
 
-  return withPermit(async () => {
-    for (let attempt = 0; ; attempt++) {
-      const res = await send(url, headers);
-      if ((res.status === 429 || res.status === 503) && attempt < MAX_RETRIES) {
-        const delay = retryDelayMs(res, attempt);
-        if (delay !== undefined) {
-          await res.body?.cancel().catch(() => undefined);
-          await sleep(delay, undefined, { signal: callerSignal.getStore() }).catch(() => {
-            throw new FounduApiError('The foundU API request was cancelled.');
-          });
-          continue;
-        }
-      }
-      return readResult(res, req.path);
-    }
-  });
+  const signal = requestSignal();
+  for (let attempt = 0; ; attempt++) {
+    const outcome = await withPermit(token, signal, async (): Promise<{ value: unknown } | { retryInMs: number }> => {
+      const res = await send(url, headers, signal);
+      const retryInMs = (res.status === 429 || res.status === 503) && attempt < MAX_RETRIES ? retryDelayMs(res, attempt) : undefined;
+      if (retryInMs === undefined) return { value: await readResult(res, req.path) };
+      await res.body?.cancel().catch(() => undefined);
+      return { retryInMs };
+    });
+    if ('value' in outcome) return outcome.value;
+    // Back off without holding a permit, so other calls on this token keep moving.
+    await sleep(outcome.retryInMs, undefined, { signal }).catch(() => {
+      throw cancelled();
+    });
+  }
 }
 
-async function send(url: URL, headers: Record<string, string>): Promise<Response> {
+async function send(url: URL, headers: Record<string, string>, signal: AbortSignal): Promise<Response> {
   try {
-    return await fetch(url, { method: 'GET', headers, redirect: 'manual', signal: requestSignal() });
+    return await fetch(url, { method: 'GET', headers, redirect: 'manual', signal });
   } catch (err) {
     const aborted = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-    throw new FounduApiError(aborted ? 'The foundU API request timed out or was cancelled.' : 'Could not reach the foundU API (network error).');
+    throw aborted ? cancelled() : new FounduApiError('Could not reach the foundU API (network error).');
   }
 }
 

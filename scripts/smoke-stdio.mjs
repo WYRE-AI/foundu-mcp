@@ -8,6 +8,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+// The default (read tier) surface. The two admin-tier pay-figure reports are
+// listed in ADMIN_ONLY and must be absent unless FOUNDU_TOOL_TIERS names admin.
+const ADMIN_ONLY = ['foundu_labour_management_report', 'foundu_timesheet_analysis_report'];
 const EXPECTED = [
   'foundu_absence_reasons_list',
   'foundu_approved_shifts_list',
@@ -20,7 +23,6 @@ const EXPECTED = [
   'foundu_employee_shifts_list',
   'foundu_employees_search',
   'foundu_holidays_list',
-  'foundu_labour_management_report',
   'foundu_leave_applications_list',
   'foundu_leave_rules_list',
   'foundu_locations_list',
@@ -33,7 +35,6 @@ const EXPECTED = [
   'foundu_rosters_list',
   'foundu_shift_history_list',
   'foundu_states_list',
-  'foundu_timesheet_analysis_report',
   'foundu_unassigned_shifts_list',
 ];
 
@@ -65,7 +66,12 @@ try {
   const unknown = await client.callTool({ name: 'foundu_employees_delete', arguments: {} });
   if (!unknown.isError) fail('unknown tool did not error');
 
-  if (!process.exitCode) console.log(`smoke-stdio: OK (${tools.length} read-only tools; missing token refused without a network call)`);
+  for (const name of ADMIN_ONLY) {
+    const res = await client.callTool({ name, arguments: {} });
+    if (!res.isError || res.content?.[0]?.text !== `Error: Unknown tool: ${name}`) fail(`${name} is reachable without the admin tier`);
+  }
+
+  if (!process.exitCode) console.log(`smoke-stdio: OK (${tools.length} read-only tools; admin-tier reports hidden; missing token refused without a network call)`);
 } catch (err) {
   fail(err instanceof Error ? err.message : String(err));
 } finally {

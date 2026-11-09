@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getDefaultToolset } from '../tools/index.js';
+import { ALL_TIERS } from '../config.js';
+import { buildToolset } from '../tools/index.js';
 import { ArgumentError } from '../types.js';
 import { idSegment, pathSegment } from '../validate.js';
 import { always, FAKE_TOKEN, jsonResponse, mockFoundu, textOf, TOOL_COUNT } from './helpers.js';
+
+/** Every tier, so the admin-tier reports are exercised too. */
+const toolset = () => buildToolset(new Set(ALL_TIERS));
 
 /**
  * One row per endpoint in the build spec: the tool, the arguments a model
@@ -430,11 +434,12 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.FOUNDU_ACCESS_TOKEN;
+  delete process.env.FOUNDU_MAX_RESPONSE_CHARS;
 });
 
 async function call(tool: string, args: Record<string, unknown>, body: unknown = { data: [] }) {
   const { calls } = mockFoundu([always(() => jsonResponse(body))]);
-  const res = await getDefaultToolset().dispatch(tool, args);
+  const res = await toolset().dispatch(tool, args);
   return { res, calls };
 }
 
@@ -448,7 +453,7 @@ async function expectRejected(tool: string, args: Record<string, unknown>, why: 
 describe('endpoint catalog', () => {
   it(`covers every tool exactly once (${TOOL_COUNT})`, () => {
     expect(ROWS).toHaveLength(TOOL_COUNT);
-    expect(new Set(ROWS.map((r) => r.tool))).toEqual(new Set(getDefaultToolset().tools.map((t) => t.name)));
+    expect(new Set(ROWS.map((r) => r.tool))).toEqual(new Set(toolset().tools.map((t) => t.name)));
   });
 
   it.each(ROWS)('$tool -> GET $path', async ({ tool, args, path, query }) => {
@@ -464,7 +469,7 @@ describe('endpoint catalog', () => {
   it('every declared argument of every tool is exercised by a row', () => {
     // Mutually exclusive with a param in the row; pinned by its own test below.
     const coveredElsewhere: Record<string, string[]> = { foundu_labour_management_report: ['duration_specific_date'] };
-    for (const tool of getDefaultToolset().tools) {
+    for (const tool of toolset().tools) {
       const row = ROWS.find((r) => r.tool === tool.name)!;
       const declared = Object.keys(tool.inputSchema.properties ?? {});
       const unexercised = declared.filter((k) => !(k in row.args) && !coveredElsewhere[tool.name]?.includes(k));
@@ -492,6 +497,71 @@ describe('pagination is passed through, never auto-paged', () => {
     const { res, calls } = await call('foundu_timesheet_analysis_report', { filter_date_from: '2026-11-01', filter_date_to: '2026-11-07' }, body);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(textOf(res))).toEqual(body);
+  });
+});
+
+describe('endpoints without paging say when a result may be cut off', () => {
+  const rows = (n: number) => ({ data: Array.from({ length: n }, (_, i) => ({ id: i + 1 })), included: {} });
+  const unpaged = () => toolset().tools.filter((t) => 'limit' in (t.inputSchema.properties ?? {}) && !('page' in (t.inputSchema.properties ?? {})));
+
+  it('every limit-only tool says it has no paging; paged tools do not', () => {
+    expect(unpaged().length).toBeGreaterThan(10);
+    for (const t of toolset().tools) {
+      const props = t.inputSchema.properties ?? {};
+      const noPaging = 'limit' in props && !('page' in props);
+      expect(/no next page/.test(t.description ?? ''), t.name).toBe(noPaging);
+    }
+  });
+
+  it('flags a full result (data.length reaches the effective limit)', async () => {
+    const { res } = await call('foundu_employees_search', { limit: 2 }, rows(2));
+    const out = JSON.parse(textOf(res));
+    expect(out.possibly_truncated).toBe(true);
+    expect(out.truncation_note).toMatch(/no next page/);
+    expect(out.data).toHaveLength(2);
+  });
+
+  it('flags a result when limit was left to the undocumented vendor default', async () => {
+    const { res } = await call('foundu_managers_list', {}, rows(3));
+    expect(JSON.parse(textOf(res)).possibly_truncated).toBe(true);
+  });
+
+  it('does not flag a result shorter than the limit', async () => {
+    const { res } = await call('foundu_employees_search', { limit: 5 }, rows(2));
+    expect(JSON.parse(textOf(res))).toEqual(rows(2));
+  });
+
+  it('compares against the capped limit actually sent', async () => {
+    const { res } = await call('foundu_managers_list', { limit: 999_999 }, rows(1000));
+    expect(JSON.parse(textOf(res)).possibly_truncated).toBe(true);
+  });
+
+  it('never flags paged tools or tools with no limit', async () => {
+    expect(JSON.parse(textOf((await call('foundu_locations_list', { limit: 1 }, rows(1))).res))).toEqual(rows(1));
+    expect(JSON.parse(textOf((await call('foundu_positions_list', {}, rows(3))).res))).toEqual(rows(3));
+  });
+
+  it('when an unpaged result is shrunk to fit, the hint does not point at a next page', async () => {
+    process.env.FOUNDU_MAX_RESPONSE_CHARS = '1500';
+    const big = { data: Array.from({ length: 100 }, (_, i) => ({ id: i, title: 'x'.repeat(40) })) };
+    const unpagedOut = JSON.parse(textOf((await call('foundu_rosters_list', { limit: 100 }, big)).res));
+    expect(unpagedOut.truncated).toBe(true);
+    expect(unpagedOut.truncation_hint).not.toMatch(/next page/i);
+    expect(unpagedOut.truncation_hint).toMatch(/filters/);
+    const pagedOut = JSON.parse(textOf((await call('foundu_locations_list', { limit: 100 }, big)).res));
+    expect(pagedOut.truncation_hint).toMatch(/smaller limit/);
+  });
+});
+
+describe('order descriptions list only wire field names', () => {
+  it('every name after "Fields:" matches the order pattern', () => {
+    for (const t of toolset().tools) {
+      const order = (t.inputSchema.properties ?? {}).order as { description?: string; pattern?: string } | undefined;
+      if (!order?.pattern) continue;
+      const fields = /Fields: ([^.]+)\./.exec(order.description ?? '')?.[1];
+      expect(fields, t.name).toBeDefined();
+      for (const f of fields!.split(',').map((x) => x.trim())) expect(f, `${t.name}: ${f}`).toMatch(/^[A-Za-z_]{1,64}$/);
+    }
   });
 });
 
@@ -538,6 +608,9 @@ describe('argument validation (all before any request)', () => {
       /exactly one of/,
     ],
     ['foundu_leave_applications_list', { order_direction: 'desc' }, /needs "order"/],
+    ['foundu_attendance_performance_report', { duration: 'specific_date_range' }, /must be one of/],
+    ['foundu_approved_shifts_list', { filterIds: [123] }, /filterIds needs filterStartDate and filterEndDate/],
+    ['foundu_approved_shifts_list', { filterIds: [123], filterStartDate: '2026-11-01' }, /filterIds needs filterStartDate and filterEndDate/],
   ])('%s rejects %j', async (tool, args, why) => {
     await expectRejected(tool, args as Record<string, unknown>, why);
   });
