@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { maxUpstreamBytes } from '../config.js';
-import { isSensitiveKey, redactText, redactValue, REDACTED, renderSafe } from '../redact.js';
+import { isPayFigure, isSensitiveKey, redactText, redactValue, REDACTED, renderSafe, tokensOf } from '../redact.js';
 import { FAKE_TOKEN } from './helpers.js';
 
 const JWT_LIKE = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.c2lnbmF0dXJlLW5vdC1yZWFsLTEyMzQ1Ng';
@@ -110,22 +110,59 @@ describe('redaction is linear time on adversarial input', () => {
   it.each([
     ['camelCase pairs', 'aB'],
     ['digit then capital', '1A'],
+    ['snake_case amount words', 'amount_'],
   ])(
-    'isSensitiveKey: a 32M-character key of %s neither aborts the process nor goes quadratic',
+    'tokensOf: a 32M-character key of %s neither aborts the process nor goes quadratic',
     (_name, unit) => {
-      // FOUNDU_MAX_UPSTREAM_BYTES allows up to 128 MiB, so one upstream key can be this long.
       // A String.replace with millions of '$1 $2' matches is a fatal V8 "invalid size" abort, not a catchable error.
       const key = (size: number) => fill(unit, size);
-      const t1 = time(() => isSensitiveKey(key(MIB)));
-      const t4 = time(() => isSensitiveKey(key(4 * MIB)));
+      const t1 = time(() => tokensOf(key(MIB)));
+      const t4 = time(() => tokensOf(key(4 * MIB)));
       expect(t4 / Math.max(t1, 2)).toBeLessThan(8);
-      const huge = key(32 * MIB);
       const t0 = performance.now();
-      expect(redactValue({ [huge]: 1 })).toEqual({ [huge]: 1 });
+      tokensOf(key(32 * MIB));
       expect(performance.now() - t0).toBeLessThan(10_000);
     },
     30_000,
   );
+
+  it('isPayFigure: many amount words and no qualifier is linear in the token count', () => {
+    // The worst case for "a pay/amount word plus some other qualifier": no token qualifies.
+    const tokens = (n: number) => Array.from({ length: n }, (_, i) => (i % 2 ? 'amount' : 'amounts'));
+    const small = tokens(10_000);
+    const large = tokens(40_000);
+    const t1 = time(() => isPayFigure(small));
+    const t4 = time(() => isPayFigure(large));
+    expect(t4).toBeLessThan(100);
+    expect(t4 / Math.max(t1, 2)).toBeLessThan(8);
+    expect(isPayFigure(large)).toBe(false);
+    expect(isPayFigure([...large, 'overtime'])).toBe(true);
+  });
+
+  it.each([
+    ['camelCase pairs', 'aB'],
+    ['digit then capital', '1A'],
+    ['snake_case amount words', 'amount_'],
+    ['separators only', '_'],
+  ])(
+    'renderSafe: a 32M-character key of %s is redacted (fail closed) without tokenizing it',
+    (_name, unit) => {
+      // FOUNDU_MAX_UPSTREAM_BYTES allows up to 128 MiB, so one upstream key can be this long.
+      const huge = fill(unit, 32 * MIB);
+      const t0 = performance.now();
+      expect(redactValue({ [huge]: 1 })).toEqual({ [huge]: REDACTED });
+      expect(performance.now() - t0).toBeLessThan(5000);
+    },
+    30_000,
+  );
+
+  it('renderSafe: a long key of amount words is redacted quickly', () => {
+    const key = 'amount_'.repeat(16_000);
+    const t0 = performance.now();
+    const out = JSON.parse(renderSafe({ data: [{ [key]: 'v' }] }, 1_000_000, [SECRET]));
+    expect(performance.now() - t0).toBeLessThan(250);
+    expect(out.data[0][key]).toBe(REDACTED);
+  });
 
   it.each([
     ['one long Bearer token', (n: number) => `Bearer ${'a'.repeat(n - 7)}`, (out: string) => out === REDACTED],

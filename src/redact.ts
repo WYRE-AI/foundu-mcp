@@ -14,6 +14,7 @@
  *   exposed (see tools/catalog.ts), but ordinary reads still embed some (a
  *   leave ledger's `payable_rate`, a position's `position_casual_rate`, an
  *   allowance's `rates`, a shift's `costing`), so this is enforced here.
+ * A key too long to be a field name (see MAX_KEY_CHARS) is removed unread.
  * Hours, leave balances, and quantities are kept: a bare `amount` in the v1
  * surface is leave hours, and `allowance_qty` is a count.
  * The token itself is also caught by exact match (the token in use) and by
@@ -186,17 +187,33 @@ const PAY_QUALIFIERS = new Set([
  * `allowance_rate_id`, `cost_code`), and unqualified amounts or pay flags
  * (`amount` leave hours, `pay_nopay`, `break_is_payable`) are kept.
  */
-function isPayFigure(tokens: readonly string[]): boolean {
+export function isPayFigure(tokens: readonly string[]): boolean {
   if (LABEL_SUFFIXES.has(tokens.at(-1) ?? '')) return false;
   if (tokens.includes('rate') || tokens.includes('rates')) return true;
   if (tokens.some((t) => MONEY_TOKENS.has(t))) return true;
   if (tokens.length === 1 && tokens[0] === 'pay') return true;
-  return tokens.some(
-    (t, i) => ['pay', 'payable', 'paid', 'amount', 'amounts'].includes(t) && tokens.some((q, j) => j !== i && PAY_QUALIFIERS.has(q)),
-  );
+  // A pay/amount word needs a qualifier other than itself. One pass, counting: `pay`,
+  // `payable`, and `paid` are qualifiers too, so on their own they need a second one.
+  let qualifiers = 0;
+  let payWord = false;
+  let amountWord = false;
+  for (const t of tokens) {
+    if (PAY_QUALIFIERS.has(t)) qualifiers++;
+    if (t === 'amount' || t === 'amounts') amountWord = true;
+    else if (t === 'pay' || t === 'payable' || t === 'paid') payWord = true;
+  }
+  return (amountWord && qualifiers >= 1) || (payWord && qualifiers >= 2);
 }
 
+/**
+ * Keys longer than this are treated as sensitive without being tokenized.
+ * Real field names are a few dozen characters; a longer one is either not a
+ * field name or an attempt to make key scanning expensive, so it fails closed.
+ */
+const MAX_KEY_CHARS = 1024;
+
 export function isSensitiveKey(key: string): boolean {
+  if (key.length > MAX_KEY_CHARS) return true;
   if (CREDENTIAL_KEYS.has(key.toLowerCase().replace(/[\s_-]/g, ''))) return true;
   const tokens = tokensOf(key);
   const has = (t: string) => tokens.includes(t);
