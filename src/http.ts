@@ -151,6 +151,20 @@ function hostAllowed(req: IncomingMessage, allowed: ReadonlySet<string> | null):
   return allowed.has(host.replace(/:\d+$/, ''));
 }
 
+/**
+ * The request path, or undefined when the request target does not parse.
+ * new URL throws on targets such as `//h:99999/` (read as a host with an
+ * invalid port); inside the async request handler that throw would be an
+ * unhandled rejection that kills the process, before any auth check runs.
+ */
+function requestPath(req: IncomingMessage): string | undefined {
+  try {
+    return new URL(req.url || '/', 'http://localhost').pathname;
+  } catch {
+    return undefined;
+  }
+}
+
 class BodyTooLargeError extends Error {}
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -186,7 +200,11 @@ export async function startHttpServer(config: HttpConfig = resolveHttpConfig()):
   const toolset = getDefaultToolset();
 
   const httpServer = createHttpServer(async (req, res) => {
-    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+    const pathname = requestPath(req);
+    if (pathname === undefined) {
+      sendJson(res, 400, { error: 'Bad request: malformed request target.' });
+      return;
+    }
 
     if (pathname === '/health') {
       // Liveness only: unauthenticated, reads no credentials.

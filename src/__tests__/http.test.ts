@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import type { Server } from 'node:http';
+import { request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveCredentials } from '../client.js';
@@ -160,6 +160,22 @@ describe('HTTP transport', () => {
     const body = await res.text();
     expect(JSON.parse(body)).toMatchObject({ status: 'ok', mode: 'gateway' });
     expect(body).not.toContain(FAKE_TOKEN);
+  });
+
+  it.each(['//h:99999/', '//h:99999/mcp', '//[/mcp'])('answers 400 to the malformed request target %j and keeps serving', async (target) => {
+    const port = await listen();
+    // fetch() normalizes the URL, so send the raw request target with node:http.
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, path: target, method: 'GET' }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject);
+      req.setTimeout(2000, () => req.destroy(new Error('no response')));
+      req.end();
+    });
+    expect(status).toBe(400);
+    expect((await realFetch(`http://127.0.0.1:${port}/health`)).status).toBe(200);
   });
 
   it('rejects /mcp without a valid S2S header', async () => {

@@ -17,6 +17,95 @@ describe('text redaction', () => {
     const out = renderSafe(`${'x'.repeat(10)}${JWT_LIKE}`, 30);
     expect(out).not.toContain('eyJhbGciOiJSUzI1');
   });
+
+  it('redacts JWTs glued to other text, to each other, or chained by dots', () => {
+    expect(redactText(`id-${JWT_LIKE} end`)).toBe(`id-${REDACTED} end`);
+    // Back to back: the second token starts inside the first one's signature segment.
+    expect(redactText(`${JWT_LIKE}${JWT_LIKE}`)).toBe(REDACTED);
+    expect(redactText(`a ${JWT_LIKE}${JWT_LIKE}${JWT_LIKE} b`)).toBe(`a ${REDACTED} b`);
+    expect(redactText(`${JWT_LIKE}.${JWT_LIKE}`)).toBe(REDACTED);
+    // A JWT glued after a payload-like segment of other text.
+    expect(redactText(`v1.abcd${JWT_LIKE}`)).toBe(`v1.abcd${REDACTED}`);
+    expect(redactText(`${JWT_LIKE}.tail`)).toBe(`${REDACTED}.tail`);
+    expect(redactText(`"${JWT_LIKE}","${JWT_LIKE}"`)).toBe(`"${REDACTED}","${REDACTED}"`);
+  });
+
+  it('leaves ordinary and almost-JWT text untouched', () => {
+    for (const text of [
+      'version 1.2.3 of eyJ-lib, see a.b.c',
+      'eyJaaaaaaaa.bbbbbbb.cccccccc', // middle segment too short
+      'eyJaaaaa.bbbbbbbb.cccccccc', // first segment too short
+      'eyJaaaaaaaa.bbbbbbbb', // only two segments
+      'Bearer', // no token after it
+      'auth_token is a query parameter',
+      'plain text with no secrets',
+    ]) {
+      expect(redactText(text)).toBe(text);
+    }
+  });
+});
+
+/**
+ * Redaction runs on caller-influenced text up to the 4 MiB upstream cap, so
+ * it must stay linear: a backtracking pattern such as
+ * eyJ[...]{8,}\.[...]{8,}\.[...]{8,} retries from every "eyJ" of a long run
+ * and takes minutes on a few hundred KiB.
+ */
+describe('redaction is linear time on adversarial input', () => {
+  const MIB = 1024 * 1024;
+  const SECRET = 'opaque-access-token-0123456789abcdefghijklmnop';
+
+  /** Best of three, in ms. */
+  function time(fn: () => unknown): number {
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const t0 = performance.now();
+      fn();
+      best = Math.min(best, performance.now() - t0);
+    }
+    return best;
+  }
+
+  const fill = (unit: string, size: number) => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+
+  it.each([
+    ['-eyJ repeated', (n: number) => fill('-eyJ', n)],
+    ['eyJ repeated', (n: number) => fill('eyJ', n)],
+    ['eyJ then one long dotless run', (n: number) => `eyJ${'a'.repeat(n - 3)}`],
+    ['JWT-shaped segments chained by dots', (n: number) => fill('eyJaaaaaaaa.', n)],
+    ['JWT-shaped tokens glued together', (n: number) => fill('eyJaaaaaaaa.bbbbbbbb.cccccccc', n)],
+    ['near-miss JWTs (short last segment)', (n: number) => fill('eyJaaaaaaaa.bbbbbbbb.c ', n)],
+    ['Bearer with no token', (n: number) => fill('Bearer ', n)],
+    ['Bearer then long whitespace', (n: number) => fill(`Bearer${' '.repeat(1000)}!`, n)],
+    ['auth_token= with no value', (n: number) => fill('?auth_token=', n)],
+    ['known-secret near-miss', (n: number) => fill(SECRET.slice(0, -1), n)],
+  ])('redactText: %s', (_name, make) => {
+    const small = make(MIB);
+    const large = make(4 * MIB);
+    const t1 = time(() => redactText(small, [SECRET]));
+    const t4 = time(() => redactText(large, [SECRET]));
+    expect(t4).toBeLessThan(500);
+    expect(t4 / Math.max(t1, 2)).toBeLessThan(8);
+  });
+
+  it('renderSafe: an oversized page of adversarial items is redacted once, not once per shrink step', () => {
+    const page = (size: number) => ({
+      data: Array.from({ length: 1000 }, (_, i) => ({ id: i, notes: fill('eyJ', size / 1000) })),
+      meta: { pagination: { current_page: 1, last_page: 9 } },
+    });
+    const small = page(MIB);
+    const large = page(4 * MIB);
+    const t1 = time(() => renderSafe(small, 100_000, [SECRET], { paged: true }));
+    const t4 = time(() => renderSafe(large, 100_000, [SECRET], { paged: true }));
+    expect(t4).toBeLessThan(500);
+    expect(t4 / Math.max(t1, 2)).toBeLessThan(8);
+    expect(JSON.parse(renderSafe(large, 100_000, [SECRET], { paged: true })).meta).toEqual(large.meta);
+  });
+
+  it('every JWT in a long glued run is redacted', () => {
+    const run = JWT_LIKE.repeat(20_000);
+    expect(redactText(run)).toBe(REDACTED);
+  });
 });
 
 describe('field-level redaction (defence in depth)', () => {
@@ -362,6 +451,45 @@ describe('rendering', () => {
     expect(out.data).toEqual(page.data);
     expect(out.truncated).toBe(true);
     expect(out.truncation_hint).toMatch(/included/);
+  });
+
+  it('a first item larger than the cap comes back as marked, cut JSON text, never as a silent empty page', () => {
+    const page = {
+      data: [{ id: 1, notes: 'n'.repeat(5000) }, { id: 2 }, { id: 3 }],
+      meta: { pagination: { current_page: 1, last_page: 3 } },
+    };
+    const text = renderSafe(page, 2000, [], { paged: true });
+    expect(text.length).toBeLessThanOrEqual(2000);
+    const out = JSON.parse(text);
+    expect(out.meta).toEqual(page.meta);
+    expect(out.truncated).toBe(true);
+    expect(out.data).toEqual([]);
+    expect(out.returned_items).toBe(0);
+    expect(out.truncated_first_item).toMatch(/^\{"id":1,"notes":"nnnn/);
+    expect(out.truncation_hint).toMatch(/first item/);
+    expect(out.truncation_hint).toMatch(/truncated_first_item/);
+    expect(out.truncation_hint).not.toMatch(/smaller limit/);
+  });
+
+  it('the cut first item is redacted before it is cut', () => {
+    const page = { data: [{ id: 1, notes: `${'x'.repeat(1500)}${JWT_LIKE}${'y'.repeat(3000)}` }], meta: { pagination: { total: 1 } } };
+    for (const cap of [1700, 1800, 2000, 2500]) {
+      const out = renderSafe(page, cap, [], { paged: true });
+      expect(out.length).toBeLessThanOrEqual(cap);
+      expect(out).not.toContain('eyJhbGciOiJSUzI1');
+      expect(JSON.parse(out).meta).toEqual(page.meta);
+    }
+  });
+
+  it('prefers dropping `included` over cutting the first item', () => {
+    // `included` fits on its own, and the item fits on its own, but not both.
+    const included = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`branch-${i}`, { attributes: { title: 'y'.repeat(50) } }]));
+    const page = { data: [{ id: 1, title: 'z'.repeat(900) }], included, meta: { pagination: { total: 1 } } };
+    const out = JSON.parse(renderSafe(page, 2000, [], { paged: true }));
+    expect(out.truncation_hint).toMatch(/included/);
+    expect(out.included).toBeUndefined();
+    expect(out.data).toEqual(page.data);
+    expect(out.truncated_first_item).toBeUndefined();
   });
 
   it('for an endpoint without paging, the shrink hint never points at a next page', () => {

@@ -194,22 +194,90 @@ export function redactValue(value: unknown, depth = 0): unknown {
   return value;
 }
 
+const DOT = 0x2e;
+
+/** Base64url characters plus ".": [A-Za-z0-9_.-]. */
+function isTokenChar(c: number): boolean {
+  return (c >= 0x61 && c <= 0x7a) || (c >= 0x41 && c <= 0x5a) || (c >= 0x30 && c <= 0x39) || c === 0x5f || c === 0x2d || c === DOT;
+}
+
+/** Index of the first "eyJ" inside text[from, to), or -1. Never looks past `to`. */
+function findEyJ(text: string, from: number, to: number): number {
+  for (let i = from; i + 3 <= to; i++) {
+    if (text.charCodeAt(i) === 0x65 && text.charCodeAt(i + 1) === 0x79 && text.charCodeAt(i + 2) === 0x4a) return i;
+  }
+  return -1;
+}
+
+/**
+ * Redacts JWT-shaped tokens (foundU Passport access tokens): three
+ * consecutive dot-separated segments of [A-Za-z0-9_-], each at least 8
+ * characters, the first counted from an "eyJ" anywhere in its segment. No word
+ * boundary is needed, so a token glued to other text keeps that text and loses
+ * only the token. Every segment may start a token, including the last segment
+ * of a token just redacted, so back-to-back tokens (`<jwt><jwt>`, where the
+ * second header is glued to the first signature) are removed whole; the
+ * overlapping spans are merged into one [REDACTED].
+ *
+ * One forward pass, O(n): each maximal run of [A-Za-z0-9_.-] is scanned once
+ * to record its segment bounds, then each segment is searched for "eyJ" once,
+ * only within itself, and untouched text is copied in slices. The regex this
+ * replaces, eyJ[...]{8,}\.[...]{8,}\.[...]{8,}, retried from every "eyJ" of a
+ * long run and was quadratic on caller-influenced text such as shift notes.
+ */
+function redactJwts(text: string): string {
+  const out: string[] = [];
+  let copied = 0; // text[0, copied) is already in `out`
+  let i = 0;
+  while (i < text.length) {
+    if (!isTokenChar(text.charCodeAt(i))) {
+      i++;
+      continue;
+    }
+    const starts: number[] = [];
+    const ends: number[] = [];
+    let start = i;
+    for (; i < text.length && isTokenChar(text.charCodeAt(i)); i++) {
+      if (text.charCodeAt(i) === DOT) {
+        starts.push(start);
+        ends.push(i);
+        start = i + 1;
+      }
+    }
+    starts.push(start);
+    ends.push(i);
+    for (let k = 0; k + 2 < starts.length; k++) {
+      if (ends[k + 1] - starts[k + 1] < 8 || ends[k + 2] - starts[k + 2] < 8) continue;
+      const at = findEyJ(text, starts[k], ends[k]);
+      if (at < 0 || ends[k] - at < 11) continue;
+      // A token starting inside the span just redacted extends that span instead of opening a new one.
+      if (at > copied || out.length === 0) out.push(text.slice(copied, at), REDACTED);
+      copied = ends[k + 2];
+    }
+  }
+  out.push(text.slice(copied));
+  return out.join('');
+}
+
+/**
+ * Both patterns are linear: each has one unbounded repeat after a literal
+ * prefix, and no two adjacent repeats share a character (`=` is outside the
+ * Bearer token class, and the token class has no whitespace).
+ */
 const TEXT_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, REDACTED],
-  // No leading \b: a JWT glued to other word characters must still be caught.
-  [/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, REDACTED],
   // The one-time integration key travels as ?auth_token= during bootstrap; never let one through.
   [/([?&]auth_token=)[^&\s"']+/gi, `$1${REDACTED}`],
 ];
 
-/** Pattern-based redaction plus exact removal of any secrets known for this request. */
+/** Pattern-based redaction plus exact removal of any secrets known for this request. Linear in the text length. */
 export function redactText(text: string, knownSecrets: readonly (string | undefined)[] = []): string {
   let out = text;
   for (const secret of knownSecrets) {
     if (secret && secret.length >= 4) out = out.split(secret).join(REDACTED);
   }
   for (const [pattern, replacement] of TEXT_PATTERNS) out = out.replace(pattern, replacement);
-  return out;
+  return redactJwts(out);
 }
 
 export function truncate(text: string, maxChars: number): string {
@@ -227,49 +295,78 @@ function isPage(value: unknown): value is Page {
 const INCLUDED_DROPPED =
   ' The side-loaded `included` records alone exceeded the size cap and were dropped: repeat with fewer include values or a smaller limit to get them.';
 
+/** Largest n in [0, max] with fits(n), given fits(0) and that fits only turns false as n grows. */
+function largestFitting(max: number, fits: (n: number) => boolean): number {
+  let lo = 0;
+  let hi = max;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 /**
  * Fits a list page under the cap by dropping `data` items from the end while
  * keeping every other top-level field (meta, pagination, totals), so the
- * model can still page. If the side-loaded `included` block alone is too big,
- * it is dropped too (and the hint says so) rather than cutting the JSON and
- * losing `meta`. Returns undefined when even an empty `data` does not fit.
+ * model can still page. If the page with its side-loaded `included` block
+ * fits no whole item, `included` is dropped (and the hint says so). If not
+ * even the first item fits on its own, it is returned cut short, as clearly
+ * marked JSON text in `truncated_first_item`, rather than as an empty page.
+ * Returns undefined when not even the page fields fit.
+ *
+ * The page fields and each item are serialized and redacted once, up front;
+ * the searches below only join already-redacted slices. Redacting the pieces
+ * separately matches redacting the whole text: they are joined by JSON
+ * punctuation outside any string, which no redaction pattern crosses. `data`
+ * is written last.
  */
-function shrinkPage(page: Page, maxChars: number, render: (v: unknown) => string, paged: boolean): string | undefined {
-  const fitted = fitItems(page, maxChars, render, paged, '');
-  if (fitted !== undefined || !('included' in page)) return fitted;
-  const { included: _included, ...withoutIncluded } = page;
-  return fitItems(withoutIncluded as Page, maxChars, render, paged, INCLUDED_DROPPED);
-}
-
-function fitItems(page: Page, maxChars: number, render: (v: unknown) => string, paged: boolean, note: string): string | undefined {
+function shrinkPage(page: Page, maxChars: number, redact: (s: string) => string, paged: boolean): string | undefined {
   const total = page.data.length;
+  const items = page.data.map((v) => redact(JSON.stringify(v) ?? 'null'));
+  // The page's own copies of the keys this function writes are dropped, so the output has no duplicate keys.
+  const own: Record<string, unknown> = { ...page, data: undefined, truncated: undefined, returned_items: undefined, total_items_in_page: undefined, truncation_hint: undefined, truncated_first_item: undefined };
+  const variants: Array<[Record<string, unknown>, string]> = [[own, '']];
+  if (own.included !== undefined) variants.push([{ ...own, included: undefined }, INCLUDED_DROPPED]);
+
   const itemsHint = (n: number) =>
     paged
       ? `Only the first ${n} of ${total} items in this page fit in the response. Moving to the next page skips the rest: ` +
         `to see them, repeat this request with a smaller limit (at most ${Math.max(n, 1)}).`
       : `Only the first ${n} of ${total} items fit in the response, and this endpoint has no paging: ` +
         'to see the rest, narrow the filters or date window.';
-  const hint = (n: number) => (n < total ? itemsHint(n) + note : `All ${total} items are returned.${note}`);
-  const build = (n: number) =>
-    render({
-      ...page,
-      data: page.data.slice(0, n),
-      truncated: true,
-      returned_items: n,
-      total_items_in_page: total,
-      truncation_hint: hint(n),
-    });
-  if (build(0).length > maxChars) return undefined;
-  // Output length only grows with n, so binary-search the largest n that fits.
-  // n = total can fit once `included` has been dropped.
-  let lo = 0;
-  let hi = total;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (build(mid).length <= maxChars) lo = mid;
-    else hi = mid - 1;
+  const cutHint =
+    'The first item alone is larger than the response cap, so it is returned cut short, as JSON text that does not parse, ' +
+    `in truncated_first_item, and data is empty. The other ${total - 1} items in this page are not returned. ` +
+    (paged ? 'Moving to the next page skips them. ' : '') +
+    'Fetch that item through its get tool, or narrow the filters, include values, or date window.';
+
+  const builders = variants.map(([v, note]) => {
+    const fields = redact(JSON.stringify(v)).slice(1, -1);
+    return (n: number, cut?: string) => {
+      const meta = JSON.stringify({
+        truncated: true,
+        returned_items: n,
+        total_items_in_page: total,
+        truncation_hint: (cut !== undefined ? cutHint : n < total ? itemsHint(n) : `All ${total} items are returned.`) + note,
+        truncated_first_item: cut,
+      }).slice(1, -1);
+      return `{${fields ? `${fields},` : ''}${meta},"data":[${items.slice(0, n).join(',')}]}`;
+    };
+  });
+  const fits = (s: string) => s.length <= maxChars;
+  const usable = builders.filter((build) => fits(build(0)));
+  for (const build of usable) {
+    const n = largestFitting(total, (k) => fits(build(k)));
+    if (n > 0 || total === 0) return build(n);
   }
-  return build(lo);
+  // Not even the first item fits on its own. Cut its already-redacted text, so no secret survives as a prefix.
+  const build = usable.at(-1);
+  if (!build) return undefined;
+  const cutAt = (k: number) => build(0, `${items[0].slice(0, k)}…[cut]`);
+  if (!fits(cutAt(0))) return undefined;
+  return cutAt(largestFitting(items[0].length, (k) => fits(cutAt(k))));
 }
 
 /**
@@ -285,10 +382,10 @@ export function renderSafe(
   knownSecrets: readonly (string | undefined)[] = [],
   { paged = false }: { paged?: boolean } = {},
 ): string {
-  if (typeof value === 'string') return truncate(redactText(value, knownSecrets), maxChars);
-  const render = (v: unknown) => redactText(JSON.stringify(v) ?? 'null', knownSecrets);
+  const redact = (text: string) => redactText(text, knownSecrets);
+  if (typeof value === 'string') return truncate(redact(value), maxChars);
   const redacted = redactValue(value);
-  const text = render(redacted);
+  const text = redact(JSON.stringify(redacted) ?? 'null');
   if (text.length <= maxChars) return text;
-  return (isPage(redacted) && shrinkPage(redacted, maxChars, render, paged)) || truncate(text, maxChars);
+  return (isPage(redacted) && shrinkPage(redacted, maxChars, redact, paged)) || truncate(text, maxChars);
 }
