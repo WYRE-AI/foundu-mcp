@@ -112,13 +112,46 @@ const SENSITIVE_RESOURCES = [
 /** Home-address keys. Business addresses (`office_address`, `postal_address` on an operation) are kept. */
 const HOME_ADDRESS_WORDS = new Set(['address', 'full', 'home', 'residential']);
 
-/** Splits camelCase, snake_case, kebab-case, and "Title Case" keys into lower-case tokens. */
+/** ASCII [a-z0-9]. */
+function isLowerOrDigit(c: number): boolean {
+  return (c >= 0x61 && c <= 0x7a) || (c >= 0x30 && c <= 0x39);
+}
+
+/** ASCII [A-Z]. */
+function isUpper(c: number): boolean {
+  return c >= 0x41 && c <= 0x5a;
+}
+
+/**
+ * Splits camelCase, snake_case, kebab-case, and "Title Case" keys into
+ * lower-case tokens: runs of [a-z0-9] after lower-casing, also split where a
+ * lower-case letter or digit is followed by a capital. A manual scan, not
+ * String.replace: keys come from upstream JSON, and a replace with millions
+ * of matches on one long key ("aBaB...") is a fatal V8 abort, not an error.
+ */
 export function tokensOf(key: string): string[] {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
+  const tokens: string[] = [];
+  const pushRuns = (part: string) => {
+    const lower = part.toLowerCase();
+    let start = -1;
+    for (let i = 0; i <= lower.length; i++) {
+      const inRun = i < lower.length && isLowerOrDigit(lower.charCodeAt(i));
+      if (inRun && start < 0) start = i;
+      else if (!inRun && start >= 0) {
+        tokens.push(lower.slice(start, i));
+        start = -1;
+      }
+    }
+  };
+  let from = 0;
+  for (let i = 1; i < key.length; i++) {
+    if (isUpper(key.charCodeAt(i)) && isLowerOrDigit(key.charCodeAt(i - 1))) {
+      pushRuns(key.slice(from, i));
+      from = i;
+    }
+  }
+  pushRuns(key.slice(from));
+  return tokens;
 }
 
 /** Words that make a `pay` or `amount` field a money figure rather than hours or a label. */
@@ -259,16 +292,65 @@ function redactJwts(text: string): string {
   return out.join('');
 }
 
+const WHITESPACE = /\s/y;
+
+/** JavaScript's \s at text[i]: a sticky one-character test, no quantifier. */
+function isSpaceAt(text: string, i: number): boolean {
+  WHITESPACE.lastIndex = i;
+  return WHITESPACE.test(text);
+}
+
+/** The first index at or after `from` where ok(i) is false. */
+function skipWhile(text: string, from: number, ok: (i: number) => boolean): number {
+  let i = from;
+  while (i < text.length && ok(i)) i++;
+  return i;
+}
+
+/** After "Bearer": \s+, then [A-Za-z0-9._~+/-]+, then any "=" padding. Returns `from` when no token follows. */
+function bearerEnd(text: string, from: number): number {
+  const tokenStart = skipWhile(text, from, (i) => isSpaceAt(text, i));
+  const tokenEnd = skipWhile(text, tokenStart, (i) => {
+    const c = text.charCodeAt(i);
+    return isTokenChar(c) || c === 0x7e || c === 0x2b || c === 0x2f; // ~ + /
+  });
+  if (tokenStart === from || tokenEnd === tokenStart) return from;
+  return skipWhile(text, tokenEnd, (i) => text.charCodeAt(i) === 0x3d); // =
+}
+
+/** After "auth_token=": [^&\s"']+. Returns `from` when the value is empty. */
+function queryValueEnd(text: string, from: number): number {
+  return skipWhile(text, from, (i) => {
+    const c = text.charCodeAt(i);
+    return c !== 0x26 && c !== 0x22 && c !== 0x27 && !isSpaceAt(text, i); // & " '
+  });
+}
+
 /**
- * Both patterns are linear: each has one unbounded repeat after a literal
- * prefix, and no two adjacent repeats share a character (`=` is outside the
- * Bearer token class, and the token class has no whitespace).
+ * Credentials that follow a fixed prefix. Each regex only finds the prefix and
+ * has no quantifier; the value's extent is found by a manual scan, so a pass
+ * is linear and never touches the regex backtracking stack.
  */
-const TEXT_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, REDACTED],
+const PREFIXED_SECRETS: ReadonlyArray<{ prefix: RegExp; end: (text: string, from: number) => number; keepPrefix: boolean }> = [
+  { prefix: /\bBearer/gi, end: bearerEnd, keepPrefix: false },
   // The one-time integration key travels as ?auth_token= during bootstrap; never let one through.
-  [/([?&]auth_token=)[^&\s"']+/gi, `$1${REDACTED}`],
+  { prefix: /[?&]auth_token=/gi, end: queryValueEnd, keepPrefix: true },
 ];
+
+function redactPrefixed(text: string, { prefix, end, keepPrefix }: (typeof PREFIXED_SECRETS)[number]): string {
+  const out: string[] = [];
+  let copied = 0; // text[0, copied) is already in `out`
+  prefix.lastIndex = 0;
+  for (let m = prefix.exec(text); m; m = prefix.exec(text)) {
+    const valueStart = prefix.lastIndex;
+    const valueEnd = end(text, valueStart);
+    if (valueEnd === valueStart) continue;
+    out.push(text.slice(copied, keepPrefix ? valueStart : m.index), REDACTED);
+    copied = prefix.lastIndex = valueEnd;
+  }
+  out.push(text.slice(copied));
+  return out.join('');
+}
 
 /** Pattern-based redaction plus exact removal of any secrets known for this request. Linear in the text length. */
 export function redactText(text: string, knownSecrets: readonly (string | undefined)[] = []): string {
@@ -276,7 +358,7 @@ export function redactText(text: string, knownSecrets: readonly (string | undefi
   for (const secret of knownSecrets) {
     if (secret && secret.length >= 4) out = out.split(secret).join(REDACTED);
   }
-  for (const [pattern, replacement] of TEXT_PATTERNS) out = out.replace(pattern, replacement);
+  for (const spec of PREFIXED_SECRETS) out = redactPrefixed(out, spec);
   return redactJwts(out);
 }
 

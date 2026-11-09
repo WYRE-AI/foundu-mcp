@@ -106,6 +106,70 @@ describe('redaction is linear time on adversarial input', () => {
     const run = JWT_LIKE.repeat(20_000);
     expect(redactText(run)).toBe(REDACTED);
   });
+
+  it.each([
+    ['camelCase pairs', 'aB'],
+    ['digit then capital', '1A'],
+  ])(
+    'isSensitiveKey: a 32M-character key of %s neither aborts the process nor goes quadratic',
+    (_name, unit) => {
+      // FOUNDU_MAX_UPSTREAM_BYTES allows up to 128 MiB, so one upstream key can be this long.
+      // A String.replace with millions of '$1 $2' matches is a fatal V8 "invalid size" abort, not a catchable error.
+      const key = (size: number) => fill(unit, size);
+      const t1 = time(() => isSensitiveKey(key(MIB)));
+      const t4 = time(() => isSensitiveKey(key(4 * MIB)));
+      expect(t4 / Math.max(t1, 2)).toBeLessThan(8);
+      const huge = key(32 * MIB);
+      const t0 = performance.now();
+      expect(redactValue({ [huge]: 1 })).toEqual({ [huge]: 1 });
+      expect(performance.now() - t0).toBeLessThan(10_000);
+    },
+    30_000,
+  );
+
+  it.each([
+    ['one long Bearer token', (n: number) => `Bearer ${'a'.repeat(n - 7)}`, (out: string) => out === REDACTED],
+    ['dense Bearer tokens', (n: number) => fill('Bearer a ', n), (out: string) => !out.includes('Bearer a')],
+    ['one long auth_token value', (n: number) => `?auth_token=${'a'.repeat(n - 12)}`, (out: string) => out === `?auth_token=${REDACTED}`],
+    ['dense auth_token values', (n: number) => fill('&auth_token=a', n), (out: string) => !out.includes('=a')],
+  ])(
+    'redactText at 32M characters: %s',
+    (_name, make, redacted) => {
+      const text = make(32 * MIB);
+      const t0 = performance.now();
+      const out = redactText(text);
+      expect(performance.now() - t0).toBeLessThan(5000);
+      expect(redacted(out)).toBe(true);
+    },
+    30_000,
+  );
+});
+
+describe('Bearer and auth_token scanning', () => {
+  it.each([
+    ['Authorization: Bearer abc.def-ghi', `Authorization: ${REDACTED}`],
+    ['bearer lower-case', REDACTED],
+    ['BEARER\t\tabc==tail', `${REDACTED}tail`],
+    ['Bearer abc+/~_.-xyz== next', `${REDACTED} next`],
+    ['Bearer  nbsp1', REDACTED],
+    ['Bearer \t\n abc!', `${REDACTED}!`],
+    ['xBearer abc', 'xBearer abc'],
+    ['_Bearer abc', '_Bearer abc'],
+    ['-Bearer abc', `-${REDACTED}`],
+    ['Bearer', 'Bearer'],
+    ['Bearer   ', 'Bearer   '],
+    ['Bearer !abc', 'Bearer !abc'],
+    ['Bearerabc', 'Bearerabc'],
+    ['Bearer ! Bearer abc', `Bearer ! ${REDACTED}`],
+    ['/x?auth_token=k3y&x=1', `/x?auth_token=${REDACTED}&x=1`],
+    ['/x?a=1&AUTH_TOKEN=k3y next', `/x?a=1&AUTH_TOKEN=${REDACTED} next`],
+    [`"?auth_token=k3y'"`, `"?auth_token=${REDACTED}'"`],
+    ['?auth_token=&auth_token=k3y', `?auth_token=&auth_token=${REDACTED}`],
+    ['?auth_token= k3y', '?auth_token= k3y'],
+    ['auth_token=k3y', 'auth_token=k3y'],
+  ])('%j', (input, expected) => {
+    expect(redactText(input)).toBe(expected);
+  });
 });
 
 describe('field-level redaction (defence in depth)', () => {
