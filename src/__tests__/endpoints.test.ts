@@ -506,6 +506,10 @@ describe('limits are capped at the vendor maximum', () => {
     expect(calls[0].url.searchParams.get('limit')).toBe(String(max));
   });
 
+  it('rejects an out-of-range integer filter instead of capping it', async () => {
+    await expectRejected('foundu_attendance_performance_report', { duration: 'all', filter_reason_type: 9 }, /"filter_reason_type" must be at most 3/);
+  });
+
   it('rejects a limit below 1', async () => {
     await expectRejected('foundu_managers_list', { limit: 0 }, /at least 1/);
   });

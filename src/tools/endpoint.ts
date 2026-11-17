@@ -10,7 +10,8 @@
  *   for the parameters foundU types as arrays;
  * - booleans are flags: true sends the documented truthy value, false sends
  *   nothing;
- * - integers above `maximum` are capped to the vendor maximum;
+ * - `limit` above its `maximum` is capped to the vendor maximum; any other
+ *   integer above `maximum` is rejected;
  * - `wire` renames a param on the wire. Two params may share a wire name;
  *   their values are sent in declaration order.
  * Pagination is passed through as-is: no tool ever fetches a second page.
@@ -133,7 +134,10 @@ function wireValues(key: string, p: Param, value: unknown): string[] {
       return [checkString(value, key, p)];
     case 'integer': {
       const n = checkInteger(value, key, p.minimum);
-      return [String(p.maximum !== undefined ? Math.min(n, p.maximum) : n)];
+      if (p.maximum === undefined || n <= p.maximum) return [String(n)];
+      // Only a page size may be capped; any other value over the maximum is a filter the caller did not mean.
+      if (key === 'limit') return [String(p.maximum)];
+      throw new ArgumentError(`"${key}" must be at most ${p.maximum}.`);
     }
     case 'boolean':
       if (typeof value !== 'boolean') throw new ArgumentError(`"${key}" must be true or false.`);

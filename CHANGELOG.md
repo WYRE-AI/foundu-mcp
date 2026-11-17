@@ -33,3 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `admin` tier and the two reports in it, `foundu_labour_management_report` and `foundu_timesheet_analysis_report`: both return per-employee pay, which breaks the read-only v1 contract. The README notes them as a possible future admin feature. `FOUNDU_TOOL_TIERS=read,admin` now fails startup.
 - The unpublished scaffold's invented `/api/v1/aggregates/*` tools, `foundu_raw_request`, `foundu_status`, and the per-tenant base URL and static API token settings (`FOUNDU_BASE_URL`, `FOUNDU_API_TOKEN`, `x-foundu-base-url`, `x-foundu-api-token`). None of those paths exist in the foundU API.
+
+### Fixed
+
+- Integer filters above their documented maximum (such as `filter_reason_type: 9`) are rejected with an error instead of being silently capped to the maximum, which returned records the caller did not ask for. Only `limit` is still capped.
