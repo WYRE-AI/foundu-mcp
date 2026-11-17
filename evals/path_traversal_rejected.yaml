@@ -1,0 +1,14 @@
+name: a path-traversal ID is rejected before any upstream call
+server:
+  command: node
+  args: [dist/index.js]
+  env:
+    FOUNDU_ACCESS_TOKEN: foundu-eval-token-not-real-0000
+assert:
+  tool: foundu_employee_get
+  args:
+    id: "../state"
+  expect:
+    is_error: true
+    contains: ["\"id\""]
+timeout: 30s
